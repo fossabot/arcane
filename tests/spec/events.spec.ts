@@ -46,9 +46,32 @@ test.describe('Events Page', () => {
     try {
       await navigateToEvents(page);
 
-      // The env-scoped events endpoint should only return env "0" entries by default.
-      await expect(page.getByText(titleEnv0).first()).toBeVisible();
-      await expect(page.getByText(titleOther).first()).toHaveCount(0);
+      // Note: the desktop Events table does not show the title column; the title is shown
+      // in the details dialog and in mobile cards. So we search for the event, then open
+      // its details to assert it's present in the scoped list.
+      const search = page.getByPlaceholder(/search/i);
+
+      // Search for the env0 event
+      await search.fill(titleEnv0);
+      await search.press('Enter');
+
+      // Open row actions -> View details
+      await page.getByRole('button', { name: 'Open menu' }).first().click();
+      await page.getByRole('menuitem', { name: /view details/i }).click();
+
+      // Title should be visible inside the details dialog
+      await expect(page.getByRole('heading', { name: titleEnv0 })).toBeVisible();
+
+      // Close dialog so the next search isn't obstructed
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('heading', { name: titleEnv0 })).toHaveCount(0);
+
+      // Search for the other-environment event, which should NOT exist in this environment-scoped list.
+      await search.fill(titleOther);
+      await search.press('Enter');
+
+      // No rows should be present for that search.
+      await expect(page.getByRole('button', { name: 'Open menu' })).toHaveCount(0);
     } finally {
       await deleteTestEvent(page, idEnv0);
       await deleteTestEvent(page, idOther);
