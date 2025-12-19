@@ -171,10 +171,6 @@ dockers_v2:
       'com.getarcaneapp.arcane.server': 'true'
     disable: '{{ if not (index .Env "BUILD_NEXT") }}true{{ end }}'
     sbom: true
-    retry:
-      attempts: 5
-      delay: 5s
-      max_delay: 120s
 
   - id: arcane-agent-next
     ids:
@@ -203,10 +199,6 @@ dockers_v2:
       'com.getarcaneapp.arcane.server': 'true'
     disable: '{{ if not (index .Env "BUILD_NEXT") }}true{{ end }}'
     sbom: true
-    retry:
-      attempts: 5
-      delay: 5s
-      max_delay: 120s
 
   - id: arcane-next-distroless
     ids:
@@ -235,10 +227,6 @@ dockers_v2:
       'com.getarcaneapp.arcane.server': 'true'
     disable: '{{ if not (index .Env "BUILD_NEXT") }}true{{ end }}'
     sbom: true
-    retry:
-      attempts: 5
-      delay: 5s
-      max_delay: 120s
 
   - id: arcane-agent-next-distroless
     ids:
@@ -267,10 +255,6 @@ dockers_v2:
       'com.getarcaneapp.arcane.server': 'true'
     disable: '{{ if not (index .Env "BUILD_NEXT") }}true{{ end }}'
     sbom: true
-    retry:
-      attempts: 5
-      delay: 5s
-      max_delay: 120s
 
 changelog:
   disable: '{{ if index .Env "SKIP_CHANGELOG" }}true{{ end }}'

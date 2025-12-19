@@ -40,6 +40,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      - name: Set up Depot CLI
+        uses: depot/setup-action@v1
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -51,6 +54,11 @@ jobs:
         id: vars
         run: |
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Setup depot buildx driver
+        id: setup-buildx-driver
+        run: |
+          depot configure-docker
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
