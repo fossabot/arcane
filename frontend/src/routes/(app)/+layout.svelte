@@ -76,7 +76,7 @@
 {:else}
 	<Sidebar.Provider>
 		<AppSidebar {versionInformation} {user} />
-		<main class="h-dvh flex-1 overflow-hidden">
+		<main class="h-dvh flex-1">
 			<section class="h-full p-3 sm:p-5">
 				{@render children()}
 			</section>
