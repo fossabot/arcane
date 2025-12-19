@@ -1,13 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { monaco, initShiki } from './monaco';
 	import { mode } from 'mode-watcher';
 	import jsyaml from 'js-yaml';
-
-	function getCurrentTheme(): string {
-		const isDark = mode.current === 'dark';
-		return isDark ? 'catppuccin-mocha' : 'catppuccin-latte';
-	}
 
 	type CodeLanguage = 'yaml' | 'env';
 
@@ -16,61 +11,75 @@
 		language = 'yaml' as CodeLanguage,
 		readOnly = false,
 		fontSize = '12px',
-		fileUri = undefined
+		fileUri = undefined,
+		autoHeight = false
 	}: {
 		value: string;
 		language: CodeLanguage;
 		readOnly?: boolean;
 		fontSize?: string;
 		fileUri?: string;
+		autoHeight?: boolean;
 	} = $props();
 
-	let editorElement: HTMLDivElement;
-	let editor: monaco.editor.IStandaloneCodeEditor;
+	let editorElement = $state<HTMLDivElement>();
+	let editor = $state.raw<monaco.editor.IStandaloneCodeEditor | null>(null);
+	let model = $state.raw<monaco.editor.ITextModel | null>(null);
+	let ownsModel = $state(false);
 	let resizeObserver: ResizeObserver | null = null;
-	let model: monaco.editor.ITextModel | null = null;
-	let ownsModel = false;
+	let changeDisposable: monaco.IDisposable | null = null;
 
-	function validateYaml() {
-		if (!model || language !== 'yaml' || readOnly) {
-			if (model) monaco.editor.setModelMarkers(model, 'yaml-linter', []);
-			return;
-		}
+	const langId = $derived(language === 'env' ? 'ini' : language);
+	const theme = $derived(mode.current === 'dark' ? 'catppuccin-mocha' : 'catppuccin-latte');
 
-		const content = model.getValue();
+	const markers = $derived.by(() => {
+		if (!model || language !== 'yaml' || readOnly) return [];
+
 		try {
-			jsyaml.load(content);
-			monaco.editor.setModelMarkers(model, 'yaml-linter', []);
+			jsyaml.load(value);
+			return [];
 		} catch (e: unknown) {
-			const markers: monaco.editor.IMarkerData[] = [];
 			const err = e as { mark?: { line: number; column: number }; reason?: string; message?: string };
 			const mark = err.mark;
 
 			if (mark) {
-				markers.push({
-					severity: monaco.MarkerSeverity.Error,
-					message: err.reason || err.message || 'YAML error',
-					startLineNumber: mark.line + 1,
-					startColumn: mark.column + 1,
-					endLineNumber: mark.line + 1,
-					endColumn: model.getLineMaxColumn(mark.line + 1)
-				});
-			} else {
-				markers.push({
+				const lineCount = model.getLineCount();
+				const lineNumber = Math.min(Math.max(1, mark.line + 1), lineCount);
+				const maxColumn = model.getLineMaxColumn(lineNumber);
+
+				return [
+					{
+						severity: monaco.MarkerSeverity.Error,
+						message: err.reason || err.message || 'YAML error',
+						startLineNumber: lineNumber,
+						startColumn: Math.min(mark.column + 1, maxColumn),
+						endLineNumber: lineNumber,
+						endColumn: maxColumn
+					}
+				];
+			}
+			return [
+				{
 					severity: monaco.MarkerSeverity.Error,
 					message: err.message || 'YAML error',
 					startLineNumber: 1,
 					startColumn: 1,
 					endLineNumber: 1,
 					endColumn: 1
-				});
-			}
-			monaco.editor.setModelMarkers(model, 'yaml-linter', markers);
+				}
+			];
 		}
+	});
+
+	function updateHeight() {
+		if (!editor || !editorElement || !autoHeight) return;
+		const contentHeight = editor.getContentHeight();
+		editorElement.style.height = `${contentHeight}px`;
+		editor.layout();
 	}
 
 	onMount(async () => {
-		const langId = language === 'env' ? 'ini' : language;
+		if (!editorElement) return;
 
 		await initShiki(monaco);
 
@@ -85,64 +94,99 @@
 
 		editor = monaco.editor.create(editorElement, {
 			model: model,
-			automaticLayout: true,
-			theme: getCurrentTheme(),
-			readOnly: readOnly,
+			automaticLayout: false,
+			theme,
+			readOnly,
 			fontSize: parseInt(fontSize.replace('px', '')),
 			minimap: { enabled: false },
 			scrollBeyondLastLine: false,
 			fontFamily:
 				'"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-			padding: { top: 10, bottom: 10 }
+			padding: { top: 10, bottom: 10 },
+			scrollbar: autoHeight
+				? {
+						vertical: 'hidden',
+						handleMouseWheel: false
+					}
+				: undefined
 		});
 
-		model.onDidChangeContent(() => {
+		changeDisposable = model.onDidChangeContent(() => {
 			value = model?.getValue() || '';
-			validateYaml();
 		});
 
 		resizeObserver = new ResizeObserver(() => {
-			editor?.layout();
+			requestAnimationFrame(() => {
+				editor?.layout();
+			});
 		});
 		resizeObserver.observe(editorElement);
-
-		// Force layout update
-		editor.layout();
-		validateYaml();
 	});
 
+	onDestroy(() => {
+		changeDisposable?.dispose();
+		resizeObserver?.disconnect();
+		editor?.dispose();
+		if (ownsModel) model?.dispose();
+	});
+
+	// Sync value to model
 	$effect(() => {
 		if (model && value !== model.getValue()) {
 			model.setValue(value);
 		}
 	});
 
+	// Sync language
 	$effect(() => {
 		if (model) {
-			const langId = language === 'env' ? 'ini' : language;
 			monaco.editor.setModelLanguage(model, langId);
-			validateYaml();
 		}
 	});
 
+	// Sync markers
+	$effect(() => {
+		if (model) {
+			monaco.editor.setModelMarkers(model, 'yaml-linter', markers);
+		}
+	});
+
+	// Sync options and layout
 	$effect(() => {
 		if (editor) {
-			editor.updateOptions({ readOnly });
-			validateYaml();
+			editor.updateOptions({
+				readOnly,
+				theme,
+				fontSize: parseInt(fontSize.replace('px', '')),
+				scrollbar: autoHeight
+					? {
+							vertical: 'hidden',
+							handleMouseWheel: false
+						}
+					: {
+							vertical: 'auto',
+							handleMouseWheel: true
+						}
+			});
+			editor.layout();
 		}
 	});
 
-	// Watch for theme changes and update globally
+	// Auto-height handling
 	$effect(() => {
-		monaco.editor.setTheme(getCurrentTheme());
+		if (editor && autoHeight) {
+			const disposable = editor.onDidContentSizeChange(updateHeight);
+			updateHeight();
+			return () => disposable.dispose();
+		} else if (editorElement) {
+			editorElement.style.height = '';
+		}
 	});
 
-	onDestroy(() => {
-		resizeObserver?.disconnect();
-		resizeObserver = null;
-		editor?.dispose();
-		if (ownsModel) model?.dispose();
+	// Global theme sync
+	$effect(() => {
+		monaco.editor.setTheme(theme);
 	});
 </script>
 
-<div class="relative h-full min-h-0 w-full overflow-visible" bind:this={editorElement}></div>
+<div class="relative {autoHeight ? '' : 'h-full'} min-h-0 w-full overflow-visible" bind:this={editorElement}></div>
