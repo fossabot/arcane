@@ -97,22 +97,25 @@ func Table(headers []string, rows [][]string) {
 		return
 	}
 
-	// Compute display widths for each column (strip ANSI sequences when measuring)
+	widths := computeWidths(headers, rows)
+	printHeader(headers, widths)
+	for _, row := range rows {
+		printRow(row, widths, n)
+	}
+}
+
+func computeWidths(headers []string, rows [][]string) []int {
+	n := len(headers)
 	widths := make([]int, n)
 	for i, h := range headers {
-		w := runewidth.StringWidth(stripAnsi(h))
-		widths[i] = w
+		widths[i] = runewidth.StringWidth(stripAnsi(h))
 	}
-
 	for _, row := range rows {
 		for i := 0; i < n; i++ {
 			var cell string
 			if i < len(row) {
 				cell = row[i]
-			} else {
-				cell = ""
 			}
-			// consider multiline cells; take widest line
 			lines := strings.Split(cell, "\n")
 			for _, ln := range lines {
 				w := runewidth.StringWidth(stripAnsi(ln))
@@ -122,13 +125,13 @@ func Table(headers []string, rows [][]string) {
 			}
 		}
 	}
+	return widths
+}
 
-	// Formatters
+func printHeader(headers []string, widths []int) {
 	headerFmt := color.New(color.Bold, color.FgHiCyan).SprintFunc()
-	columnFmt := color.New(color.FgYellow).SprintFunc()
 	sep := "  "
-
-	// Print header line
+	n := len(headers)
 	for i, h := range headers {
 		visible := stripAnsi(h)
 		colored := headerFmt(h)
@@ -143,54 +146,52 @@ func Table(headers []string, rows [][]string) {
 		}
 	}
 	fmt.Println()
+}
 
-	// Print each row, supporting multiline cells
-	for _, row := range rows {
-		// Prepare lines per column
-		cellLines := make([][]string, n)
-		maxLines := 1
+func printRow(row []string, widths []int, n int) {
+	sep := "  "
+	columnFmt := color.New(color.FgYellow).SprintFunc()
+
+	// Prepare lines per column
+	cellLines := make([][]string, n)
+	maxLines := 1
+	for i := 0; i < n; i++ {
+		var cell string
+		if i < len(row) {
+			cell = row[i]
+		}
+		lines := strings.Split(cell, "\n")
+		cellLines[i] = lines
+		if len(lines) > maxLines {
+			maxLines = len(lines)
+		}
+	}
+
+	for li := 0; li < maxLines; li++ {
 		for i := 0; i < n; i++ {
-			var cell string
-			if i < len(row) {
-				cell = row[i]
+			var val string
+			if li < len(cellLines[i]) {
+				val = cellLines[i][li]
+			}
+
+			var rendered string
+			if i == 0 {
+				rendered = columnFmt(val)
 			} else {
-				cell = ""
+				rendered = fmt.Sprint(val)
 			}
-			lines := strings.Split(cell, "\n")
-			cellLines[i] = lines
-			if len(lines) > maxLines {
-				maxLines = len(lines)
+
+			padLen := widths[i] - runewidth.StringWidth(stripAnsi(val))
+			if padLen < 0 {
+				padLen = 0
+			}
+
+			if i < n-1 {
+				fmt.Print(rendered + strings.Repeat(" ", padLen) + sep)
+			} else {
+				fmt.Print(rendered + strings.Repeat(" ", padLen))
 			}
 		}
-
-		for li := 0; li < maxLines; li++ {
-			for i := 0; i < n; i++ {
-				var val string
-				if li < len(cellLines[i]) {
-					val = cellLines[i][li]
-				} else {
-					val = ""
-				}
-
-				var rendered string
-				if i == 0 {
-					rendered = columnFmt(val)
-				} else {
-					rendered = fmt.Sprint(val)
-				}
-
-				padLen := widths[i] - runewidth.StringWidth(stripAnsi(val))
-				if padLen < 0 {
-					padLen = 0
-				}
-
-				if i < n-1 {
-					fmt.Print(rendered + strings.Repeat(" ", padLen) + sep)
-				} else {
-					fmt.Print(rendered + strings.Repeat(" ", padLen))
-				}
-			}
-			fmt.Println()
-		}
+		fmt.Println()
 	}
 }
