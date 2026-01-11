@@ -47,10 +47,10 @@ type Config struct {
 	GPUMonitoringEnabled    bool
 	GPUType                 string
 
-	FilePerm               os.FileMode
-	DirPerm                os.FileMode
-	AllowedCustomFilePaths string
-	GitWorkDir             string
+	FilePerm             os.FileMode
+	DirPerm              os.FileMode
+	AllowedExternalPaths string
+	GitWorkDir           string
 }
 
 func Load() *Config {
@@ -84,10 +84,10 @@ func Load() *Config {
 		GPUMonitoringEnabled:    getBoolEnvOrDefault("GPU_MONITORING_ENABLED", false),
 		GPUType:                 getEnvOrDefault("GPU_TYPE", "auto"),
 
-		FilePerm:               getFileModeEnvOrDefault("FILE_PERM", 0644),
-		DirPerm:                getFileModeEnvOrDefault("DIR_PERM", 0755),
-		AllowedCustomFilePaths: getEnvOrDefault("ALLOWED_CUSTOM_FILE_PATHS", ""),
-		GitWorkDir:             getEnvOrDefault("GIT_WORK_DIR", "data/git"),
+		FilePerm:             getFileModeEnvOrDefault("FILE_PERM", 0644),
+		DirPerm:              getFileModeEnvOrDefault("DIR_PERM", 0755),
+		AllowedExternalPaths: getEnvOrDefault("ALLOWED_EXTERNAL_PATHS", ""),
+		GitWorkDir:           getEnvOrDefault("GIT_WORK_DIR", "data/git"),
 	}
 
 	common.FilePerm = cfg.FilePerm

@@ -14,7 +14,7 @@ export type Settings = {
 	enableGravatar: boolean;
 	uiConfigDisabled: boolean;
 	defaultShell: string;
-	allowedCustomFilePaths: string;
+	allowedExternalPaths: string;
 	dockerHost: string;
 	accentColor: string;
 	autoInjectEnv: boolean;

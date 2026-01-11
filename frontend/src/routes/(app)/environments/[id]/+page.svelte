@@ -85,7 +85,7 @@
 	let formDiskUsagePath = $state('/app/data/projects');
 	let formMaxImageUploadSize = $state(500);
 	let formBaseServerUrl = $state('http://localhost');
-	let formAllowedCustomFilePaths = $state('');
+	let formAllowedExternalPaths = $state('');
 
 	type PollingIntervalMode = 'hourly' | 'daily' | 'weekly' | 'custom';
 
@@ -147,7 +147,7 @@
 			formDiskUsagePath = settings.diskUsagePath || '/app/data/projects';
 			formMaxImageUploadSize = settings.maxImageUploadSize || 500;
 			formBaseServerUrl = settings.baseServerUrl || 'http://localhost';
-			formAllowedCustomFilePaths = settings.allowedCustomFilePaths || '';
+			formAllowedExternalPaths = settings.allowedExternalPaths || '';
 
 			// Initialize derived states
 			pollingIntervalMode = imagePollingOptions.find((o) => o.minutes === settings.pollingInterval)?.value ?? 'custom';
@@ -204,7 +204,7 @@
 					formDiskUsagePath !== (settings.diskUsagePath || '/app/data/projects') ||
 					formMaxImageUploadSize !== (settings.maxImageUploadSize || 500) ||
 					formBaseServerUrl !== (settings.baseServerUrl || 'http://localhost') ||
-					formAllowedCustomFilePaths !== (settings.allowedCustomFilePaths || '')))
+					formAllowedExternalPaths !== (settings.allowedExternalPaths || '')))
 	);
 
 	async function refreshEnvironment() {
@@ -230,7 +230,7 @@
 				formDiskUsagePath = settings.diskUsagePath || '/app/data/projects';
 				formMaxImageUploadSize = settings.maxImageUploadSize || 500;
 				formBaseServerUrl = settings.baseServerUrl || 'http://localhost';
-				formAllowedCustomFilePaths = settings.allowedCustomFilePaths || '';
+				formAllowedExternalPaths = settings.allowedExternalPaths || '';
 
 				// Initialize derived states
 				pollingIntervalMode = imagePollingOptions.find((o) => o.minutes === settings.pollingInterval)?.value ?? 'custom';
@@ -318,7 +318,7 @@
 					diskUsagePath: formDiskUsagePath,
 					maxImageUploadSize: formMaxImageUploadSize,
 					baseServerUrl: formBaseServerUrl,
-					allowedCustomFilePaths: formAllowedCustomFilePaths
+					allowedExternalPaths: formAllowedExternalPaths
 				});
 			}
 
@@ -361,7 +361,7 @@
 			formDiskUsagePath = settings.diskUsagePath || '/app/data/projects';
 			formMaxImageUploadSize = settings.maxImageUploadSize || 500;
 			formBaseServerUrl = settings.baseServerUrl || 'http://localhost';
-			formAllowedCustomFilePaths = settings.allowedCustomFilePaths || '';
+			formAllowedExternalPaths = settings.allowedExternalPaths || '';
 
 			// Initialize derived states
 			pollingIntervalMode = imagePollingOptions.find((o) => o.minutes === settings.pollingInterval)?.value ?? 'custom';
@@ -691,11 +691,11 @@
 								</div>
 								<div class="space-y-2 sm:col-span-2">
 									<TextInputWithLabel
-										id="allowed-custom-file-paths"
-										label={m.general_allowed_custom_file_paths_label()}
-										bind:value={formAllowedCustomFilePaths}
-										placeholder={m.general_allowed_custom_file_paths_placeholder()}
-										helpText={m.general_allowed_custom_file_paths_help()}
+										id="allowed-external-paths"
+										label={m.general_allowed_external_paths_label()}
+										bind:value={formAllowedExternalPaths}
+										placeholder={m.general_allowed_external_paths_placeholder()}
+										helpText={m.general_allowed_external_paths_help()}
 									/>
 								</div>
 							</div>
