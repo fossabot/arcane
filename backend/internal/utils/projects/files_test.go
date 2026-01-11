@@ -249,7 +249,7 @@ func TestParseCustomFilesSkipsNonExistentFiles(t *testing.T) {
 
 	// Create only the valid file
 	validPath := filepath.Join(projectDir, "valid.txt")
-	if err := os.WriteFile(validPath, []byte("valid content"), 0644); err != nil {
+	if err := os.WriteFile(validPath, []byte("valid content"), common.FilePerm); err != nil {
 		t.Fatalf("failed to create valid file: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestParseCustomFilesRejectsPathTraversal(t *testing.T) {
 
 	// Create the valid file
 	validPath := filepath.Join(projectDir, "valid.txt")
-	if err := os.WriteFile(validPath, []byte("valid content"), 0644); err != nil {
+	if err := os.WriteFile(validPath, []byte("valid content"), common.FilePerm); err != nil {
 		t.Fatalf("failed to create valid file: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestParseCustomFilesAllowsExternalPaths(t *testing.T) {
 
 	// Create an external file
 	externalFile := filepath.Join(externalDir, "external.txt")
-	if err := os.WriteFile(externalFile, []byte("external content"), 0644); err != nil {
+	if err := os.WriteFile(externalFile, []byte("external content"), common.FilePerm); err != nil {
 		t.Fatalf("failed to create external file: %v", err)
 	}
 
@@ -361,7 +361,7 @@ func TestRegisterCustomFileDoesNotOverwriteExisting(t *testing.T) {
 	filePath := filepath.Join(projectDir, "existing.txt")
 
 	// Create an existing file with content
-	if err := os.WriteFile(filePath, []byte(existingContent), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(existingContent), common.FilePerm); err != nil {
 		t.Fatalf("failed to create existing file: %v", err)
 	}
 
