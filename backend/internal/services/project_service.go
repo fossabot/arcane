@@ -1207,7 +1207,7 @@ func (s *ProjectService) RemoveProjectCustomFile(ctx context.Context, projectID,
 		return err
 	}
 
-	if err := projects.RemoveCustomFile(proj.Path, filePath); err != nil {
+	if err := projects.RemoveCustomFile(proj.Path, filePath, s.getExternalPathsConfig(ctx)); err != nil {
 		return fmt.Errorf("failed to remove custom file: %w", err)
 	}
 

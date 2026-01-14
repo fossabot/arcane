@@ -124,8 +124,9 @@ func resolveParentSymlinks(absPath string) (string, error) {
 // isWithinDirectory checks if evalPath is within the given directory.
 func isWithinDirectory(evalPath, dir string) bool {
 	if evalPath == dir {
-		return false // Explicitly not "within" - equal paths handled by caller
+		return false
 	}
+	evalPath = filepath.Clean(evalPath)
 	prefix := dir + string(filepath.Separator)
 	return strings.HasPrefix(evalPath+string(filepath.Separator), prefix)
 }
@@ -304,9 +305,6 @@ func WriteIncludeFile(projectDir, includePath, content string, cfg ExternalPaths
 	}
 
 	dir := filepath.Dir(validatedPath)
-	if dir == "" || dir == "." {
-		return fmt.Errorf("invalid include path: cannot create directory '%s'", dir)
-	}
 
 	// Only create directory if it doesn't exist
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
@@ -430,7 +428,7 @@ func RegisterCustomFile(projectDir, filePath string, cfg ExternalPathsConfig) er
 
 	// Create only if file doesn't exist; existing files are registered as-is
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		if dir := filepath.Dir(absPath); dir != "." {
+		if dir := filepath.Dir(absPath); dir != "" {
 			if err := os.MkdirAll(dir, common.DirPerm); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
@@ -455,7 +453,7 @@ func WriteCustomFile(projectDir, filePath, content string, cfg ExternalPathsConf
 		return err
 	}
 
-	if dir := filepath.Dir(absPath); dir != "." {
+	if dir := filepath.Dir(absPath); dir != "" {
 		if err := os.MkdirAll(dir, common.DirPerm); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
@@ -468,14 +466,16 @@ func WriteCustomFile(projectDir, filePath, content string, cfg ExternalPathsConf
 }
 
 // RemoveCustomFile removes a file from the manifest.
-func RemoveCustomFile(projectDir, filePath string) error {
-	absProjectDir, _ := filepath.Abs(projectDir)
-
-	// Compute possible manifest paths
-	absPath := filePath
-	if !filepath.IsAbs(filePath) {
-		absPath = filepath.Join(absProjectDir, filePath)
+func RemoveCustomFile(projectDir, filePath string, cfg ExternalPathsConfig) error {
+	absPath, err := ValidateFilePath(projectDir, filePath, cfg, PathValidationOptions{
+		CheckReservedNames: false,
+		AllowProjectDir:    false,
+	})
+	if err != nil {
+		return fmt.Errorf("invalid file path: %w", err)
 	}
+
+	absProjectDir, _ := resolveAbsPath(projectDir)
 	mPath := manifestPath(absPath, absProjectDir)
 
 	manifest, err := ReadManifest(projectDir)
@@ -485,7 +485,7 @@ func RemoveCustomFile(projectDir, filePath string) error {
 
 	var updated []string
 	for _, f := range manifest.CustomFiles {
-		if f != mPath && f != filePath {
+		if f != mPath {
 			updated = append(updated, f)
 		}
 	}

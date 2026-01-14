@@ -91,7 +91,6 @@
 	let formDiskUsagePath = $state('/app/data/projects');
 	let formMaxImageUploadSize = $state(500);
 	let formBaseServerUrl = $state('http://localhost');
-	let formAllowedExternalPaths = $state('');
 	let formScheduledPruneEnabled = $state(false);
 	let formScheduledPruneInterval = $state(1440);
 	let formScheduledPruneContainers = $state(true);
@@ -99,6 +98,7 @@
 	let formScheduledPruneVolumes = $state(false);
 	let formScheduledPruneNetworks = $state(true);
 	let formScheduledPruneBuildCache = $state(false);
+	let formAllowedExternalPaths = $state('');
 
 	type PollingIntervalMode = 'hourly' | 'daily' | 'weekly' | 'custom';
 
@@ -160,7 +160,6 @@
 			formDiskUsagePath = settings.diskUsagePath || '/app/data/projects';
 			formMaxImageUploadSize = settings.maxImageUploadSize || 500;
 			formBaseServerUrl = settings.baseServerUrl || 'http://localhost';
-			formAllowedExternalPaths = settings.allowedExternalPaths || '';
 			formScheduledPruneEnabled = settings.scheduledPruneEnabled ?? false;
 			formScheduledPruneInterval = settings.scheduledPruneInterval ?? 1440;
 			formScheduledPruneContainers = settings.scheduledPruneContainers ?? true;
@@ -168,6 +167,7 @@
 			formScheduledPruneVolumes = settings.scheduledPruneVolumes ?? false;
 			formScheduledPruneNetworks = settings.scheduledPruneNetworks ?? true;
 			formScheduledPruneBuildCache = settings.scheduledPruneBuildCache ?? false;
+			formAllowedExternalPaths = settings.allowedExternalPaths || '';
 
 			// Initialize derived states
 			pollingIntervalMode = imagePollingOptions.find((o) => o.minutes === settings.pollingInterval)?.value ?? 'custom';
@@ -224,14 +224,14 @@
 					formDiskUsagePath !== (settings.diskUsagePath || '/app/data/projects') ||
 					formMaxImageUploadSize !== (settings.maxImageUploadSize || 500) ||
 					formBaseServerUrl !== (settings.baseServerUrl || 'http://localhost') ||
-					formAllowedExternalPaths !== (settings.allowedExternalPaths || '')))
 					formScheduledPruneEnabled !== (settings.scheduledPruneEnabled ?? false) ||
 					formScheduledPruneInterval !== (settings.scheduledPruneInterval ?? 1440) ||
 					formScheduledPruneContainers !== (settings.scheduledPruneContainers ?? true) ||
 					formScheduledPruneImages !== (settings.scheduledPruneImages ?? true) ||
 					formScheduledPruneVolumes !== (settings.scheduledPruneVolumes ?? false) ||
 					formScheduledPruneNetworks !== (settings.scheduledPruneNetworks ?? true) ||
-					formScheduledPruneBuildCache !== (settings.scheduledPruneBuildCache ?? false)))
+					formScheduledPruneBuildCache !== (settings.scheduledPruneBuildCache ?? false) ||
+					formAllowedExternalPaths !== (settings.allowedExternalPaths || '')))
 	);
 
 	async function refreshEnvironment() {
@@ -257,7 +257,6 @@
 				formDiskUsagePath = settings.diskUsagePath || '/app/data/projects';
 				formMaxImageUploadSize = settings.maxImageUploadSize || 500;
 				formBaseServerUrl = settings.baseServerUrl || 'http://localhost';
-				formAllowedExternalPaths = settings.allowedExternalPaths || '';
 				formScheduledPruneEnabled = settings.scheduledPruneEnabled ?? false;
 				formScheduledPruneInterval = settings.scheduledPruneInterval ?? 1440;
 				formScheduledPruneContainers = settings.scheduledPruneContainers ?? true;
@@ -265,6 +264,7 @@
 				formScheduledPruneVolumes = settings.scheduledPruneVolumes ?? false;
 				formScheduledPruneNetworks = settings.scheduledPruneNetworks ?? true;
 				formScheduledPruneBuildCache = settings.scheduledPruneBuildCache ?? false;
+				formAllowedExternalPaths = settings.allowedExternalPaths || '';
 
 				// Initialize derived states
 				pollingIntervalMode = imagePollingOptions.find((o) => o.minutes === settings.pollingInterval)?.value ?? 'custom';
@@ -354,14 +354,14 @@
 					diskUsagePath: formDiskUsagePath,
 					maxImageUploadSize: formMaxImageUploadSize,
 					baseServerUrl: formBaseServerUrl,
-					allowedExternalPaths: formAllowedExternalPaths
 					scheduledPruneEnabled: formScheduledPruneEnabled,
 					scheduledPruneInterval: sanitizedScheduledPruneInterval,
 					scheduledPruneContainers: formScheduledPruneContainers,
 					scheduledPruneImages: formScheduledPruneImages,
 					scheduledPruneVolumes: formScheduledPruneVolumes,
 					scheduledPruneNetworks: formScheduledPruneNetworks,
-					scheduledPruneBuildCache: formScheduledPruneBuildCache
+					scheduledPruneBuildCache: formScheduledPruneBuildCache,
+					allowedExternalPaths: formAllowedExternalPaths
 				});
 			}
 
