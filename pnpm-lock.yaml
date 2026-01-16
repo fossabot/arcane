@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  devalue: ^5.3.2
+  devalue: ^5.6.2
   valibot: ^1.2.0
   validator: ^13.15.22
   cookie: ^0.7.0
@@ -13,11 +13,7 @@ overrides:
 
 importers:
 
-  .:
-    dependencies:
-      svelte-motion:
-        specifier: ^0.12.2
-        version: 0.12.2(svelte@5.46.4)
+  .: {}
 
   email-templates:
     dependencies:
@@ -103,6 +99,9 @@ importers:
       svelte:
         specifier: ^5.46.4
         version: 5.46.4
+      svelte-motion:
+        specifier: ^0.12.2
+        version: 0.12.2(svelte@5.46.4)
     devDependencies:
       '@iconify/json':
         specifier: ^2.2.424
@@ -2089,9 +2088,6 @@ packages:
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
-
-  devalue@5.6.1:
-    resolution: {integrity: sha512-jDwizj+IlEZBunHcOuuFVBnIMPAEHvTsJj0BcIp94xYguLRVBcXO853px/MyIJvbVzWdsGvrRweIUWJw8hBP7A==}
 
   devalue@5.6.2:
     resolution: {integrity: sha512-nPRkjWzzDQlsejL1WVifk5rvcFi/y1onBRxjaFMjZeR9mFpqu2gmAZ9xUB9/IEanEP/vBtGeGganC/GO1fmufg==}
@@ -5076,8 +5072,6 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  devalue@5.6.1: {}
-
   devalue@5.6.2: {}
 
   devlop@1.1.0:
@@ -6382,7 +6376,7 @@ snapshots:
   sveltekit-superforms@2.29.1(@sveltejs/kit@2.49.5(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.46.4)(vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.0)(tsx@4.21.0)(yaml@2.8.1)))(svelte@5.46.4)(typescript@5.9.3)(vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.0)(tsx@4.21.0)(yaml@2.8.1)))(@types/json-schema@7.0.15)(svelte@5.46.4)(typescript@5.9.3):
     dependencies:
       '@sveltejs/kit': 2.49.5(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.46.4)(vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.0)(tsx@4.21.0)(yaml@2.8.1)))(svelte@5.46.4)(typescript@5.9.3)(vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.0)(tsx@4.21.0)(yaml@2.8.1))
-      devalue: 5.6.1
+      devalue: 5.6.2
       memoize-weak: 1.0.2
       svelte: 5.46.4
       ts-deepmerge: 7.0.3
