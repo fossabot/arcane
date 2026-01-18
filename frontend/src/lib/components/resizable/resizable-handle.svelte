@@ -15,6 +15,7 @@
 	const ctx = getResizableGroupContext();
 
 	function handlePointerDown(event: PointerEvent) {
+		if (!canResize) return;
 		ctx.startResize(index, event);
 	}
 
@@ -28,6 +29,13 @@
 	const beforeCollapsed = $derived(beforePaneId ? ctx.isCollapsed(beforePaneId) : false);
 	const afterCollapsed = $derived(afterPaneId ? ctx.isCollapsed(afterPaneId) : false);
 	const anyCollapsed = $derived(beforeCollapsed || afterCollapsed);
+
+	// Check if this handle is at an edge with a collapsed pane (can't resize)
+	const isFirstHandle = $derived(index === 0);
+	const isLastHandle = $derived(index === ctx.panes.length - 2);
+	const canResize = $derived(
+		!(isFirstHandle && beforeCollapsed) && !(isLastHandle && afterCollapsed)
+	);
 
 	// Determine which pane can be collapsed based on the collapsible prop
 	const collapsiblePaneId = $derived(collapsible === 'before' ? beforePaneId : collapsible === 'after' ? afterPaneId : null);
@@ -60,7 +68,8 @@
 	aria-orientation={isHorizontal ? 'vertical' : 'horizontal'}
 	class={cn(
 		'group relative flex shrink-0 items-center justify-center overflow-visible',
-		isHorizontal ? 'mx-2 h-full cursor-col-resize' : 'my-2 w-full cursor-row-resize',
+		isHorizontal ? 'mx-2 h-full' : 'my-2 w-full',
+		canResize && (isHorizontal ? 'cursor-col-resize' : 'cursor-row-resize'),
 		className
 	)}
 	style={isHorizontal ? `width: ${size}px;` : `height: ${size}px;`}

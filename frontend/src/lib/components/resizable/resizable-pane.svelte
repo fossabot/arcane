@@ -46,7 +46,16 @@
 	const isCollapsed = $derived(ctx.isCollapsed(id));
 	const isResizing = $derived(ctx.isResizing);
 
-	// Check if any sibling pane is collapsed
+	// Check if any sibling pane is collapsed AND there's at least one flex pane to absorb the space
+	const hasFlexPane = $derived.by(() => {
+		for (const pane of ctx.panes) {
+			if (pane.flex && !ctx.isCollapsed(pane.id)) {
+				return true;
+			}
+		}
+		return false;
+	});
+
 	const anySiblingCollapsed = $derived.by(() => {
 		for (const pane of ctx.panes) {
 			if (pane.id !== id && ctx.isCollapsed(pane.id)) {
@@ -57,8 +66,13 @@
 	});
 
 	// Determine if this pane should use flex sizing
-	// Use flex when: (has flex prop OR sibling collapsed) AND not currently resizing
-	const shouldUseFlex = $derived((flex || anySiblingCollapsed) && !isResizing);
+	// Use flex when:
+	// - This pane has flex prop AND not currently resizing, OR
+	// - A sibling is collapsed AND there's no flex pane to absorb space AND not resizing
+	//   (fallback: all panes flex to fill space when no designated flex pane exists)
+	const shouldUseFlex = $derived(
+		(flex || (anySiblingCollapsed && !hasFlexPane)) && !isResizing
+	);
 
 	const style = $derived.by(() => {
 		if (isCollapsed) {
