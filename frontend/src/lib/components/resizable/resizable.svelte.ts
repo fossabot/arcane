@@ -35,6 +35,8 @@ interface PersistedLayout {
 	collapsed: string[];
 }
 
+type GroupElement = HTMLDivElement & { __resizableGroup?: ResizableGroup };
+
 const RESIZABLE_GROUP_KEY = Symbol('resizable-group');
 
 export function setResizableGroupContext(state: ResizableGroupState) {
@@ -57,15 +59,12 @@ export class ResizableGroup implements ResizableGroupState {
 	containerRef = $state<HTMLDivElement | null>(null);
 	isResizing = $state(false);
 
-	private persistKey?: string;
-	private persistStorage: 'local' | 'session';
-	private onLayoutChange?: () => void;
 	private persistedState: PersistedState<PersistedLayout> | null = null;
-
-	private resizingHandleIndex = -1;
-	private resizeStartPos = 0;
+	private onLayoutChange?: () => void;
 	private resizeObserver: ResizeObserver | null = null;
+	private resizingHandleIndex = -1;
 	private lastContainerSize = 0;
+	private lastMovePos = 0;
 
 	constructor(options: {
 		orientation?: 'horizontal' | 'vertical';
@@ -74,198 +73,181 @@ export class ResizableGroup implements ResizableGroupState {
 		onLayoutChange?: () => void;
 	}) {
 		this.orientation = options.orientation ?? 'horizontal';
-		this.persistKey = options.persistKey;
-		this.persistStorage = options.persistStorage ?? 'session';
 		this.onLayoutChange = options.onLayoutChange;
 
-		// Initialize persistence
-		if (this.persistKey) {
+		if (options.persistKey) {
 			this.persistedState = new PersistedState<PersistedLayout>(
-				this.persistKey,
+				options.persistKey,
 				{ sizes: {}, collapsed: [] },
-				{
-					storage: this.persistStorage,
-					syncTabs: false
-				}
+				{ storage: options.persistStorage ?? 'session', syncTabs: false }
 			);
 
 			const stored = this.persistedState.current;
-			if (stored) {
-				// Restore sizes
-				if (stored.sizes) {
-					for (const [id, size] of Object.entries(stored.sizes)) {
-						this.sizes.set(id, size);
-					}
-					this.sizes = new Map(this.sizes);
+			if (stored?.sizes) {
+				for (const [id, size] of Object.entries(stored.sizes)) {
+					this.sizes.set(id, size);
 				}
-				// Restore collapsed state
-				if (stored.collapsed) {
-					this.collapsedPanes = new Set(stored.collapsed);
-				}
+				this.sizes = new Map(this.sizes);
+			}
+			if (stored?.collapsed) {
+				this.collapsedPanes = new Set(stored.collapsed);
 			}
 		}
 	}
 
 	private commitLayout() {
 		if (!this.persistedState) return;
-		
-		// Only save sizes for non-flex panes (flex panes recalculate on load)
+
 		const sizesToSave: Record<string, number> = {};
 		for (const pane of this.panes) {
 			if (!pane.flex) {
 				const size = this.sizes.get(pane.id);
-				if (size !== undefined) {
-					sizesToSave[pane.id] = size;
-				}
+				if (size !== undefined) sizesToSave[pane.id] = size;
 			}
 		}
-		
-		const layout: PersistedLayout = {
+
+		this.persistedState.current = {
 			sizes: sizesToSave,
 			collapsed: Array.from(this.collapsedPanes)
 		};
-		this.persistedState.current = layout;
 		this.onLayoutChange?.();
 	}
 
-	/**
-	 * Set up ResizeObserver to watch container size changes
-	 */
+	private updateCollapsed(mutate: (set: Set<string>) => void) {
+		mutate(this.collapsedPanes);
+		this.collapsedPanes = new Set(this.collapsedPanes);
+		this.commitLayout();
+	}
+
 	setupResizeObserver(container: HTMLDivElement) {
 		this.cleanupResizeObserver();
-		
+		(container as GroupElement).__resizableGroup = this;
+
 		this.resizeObserver = new ResizeObserver((entries) => {
 			for (const entry of entries) {
-				const newSize = this.orientation === 'horizontal' 
-					? entry.contentRect.width 
-					: entry.contentRect.height;
-				
-				// Only react if size actually changed and we're not currently resizing
+				const newSize =
+					this.orientation === 'horizontal' ? entry.contentRect.width : entry.contentRect.height;
 				if (newSize !== this.lastContainerSize && !this.isResizing) {
 					this.lastContainerSize = newSize;
-					this.enforceContainerConstraints();
+					this.enforceConstraints();
 				}
 			}
 		});
-		
+
 		this.resizeObserver.observe(container);
-		
-		// Listen for nested groups requesting space
-		container.addEventListener('resizable-request-space', this.handleNestedSpaceRequest);
-		
-		// Store initial size
+		container.addEventListener('resizable-request-space', this.handleSpaceRequest);
+		container.addEventListener('resizable-request-collapse', this.handleCollapseRequest);
+
 		const rect = container.getBoundingClientRect();
 		this.lastContainerSize = this.orientation === 'horizontal' ? rect.width : rect.height;
 	}
 
 	cleanupResizeObserver() {
-		if (this.resizeObserver) {
-			this.resizeObserver.disconnect();
-			this.resizeObserver = null;
-		}
-		
-		// Also remove the event listener
+		this.resizeObserver?.disconnect();
+		this.resizeObserver = null;
+
 		if (this.containerRef) {
-			this.containerRef.removeEventListener('resizable-request-space', this.handleNestedSpaceRequest);
+			this.containerRef.removeEventListener('resizable-request-space', this.handleSpaceRequest);
+			this.containerRef.removeEventListener('resizable-request-collapse', this.handleCollapseRequest);
+			delete (this.containerRef as GroupElement).__resizableGroup;
 		}
 	}
 
-	/**
-	 * Measure total handle space from DOM
-	 */
-	private measureHandleSpace(): number {
+	private getContainerSize(): number {
 		if (!this.containerRef) return 0;
-		
-		const handles = this.containerRef.querySelectorAll(':scope > [role="separator"]');
-		let totalHandleSpace = 0;
-		
-		handles.forEach((handle) => {
+		const rect = this.containerRef.getBoundingClientRect();
+		return this.orientation === 'horizontal' ? rect.width : rect.height;
+	}
+
+	private getPaneEl(id: string): Element | null {
+		return this.containerRef?.querySelector(`[data-pane-id="${id}"]`) ?? null;
+	}
+
+	private getNestedGroup(paneEl: Element): ResizableGroup | null {
+		const nested = paneEl.querySelector('[data-resizable-group="true"]') as GroupElement | null;
+		const group = nested?.__resizableGroup;
+		return group && group !== this ? group : null;
+	}
+
+	private measureHandles(container: Element = this.containerRef!): number {
+		if (!container) return 0;
+		let total = 0;
+		container.querySelectorAll(':scope > [role="separator"]').forEach((handle) => {
 			const rect = handle.getBoundingClientRect();
 			const style = window.getComputedStyle(handle);
-			
 			if (this.orientation === 'horizontal') {
-				const marginLeft = parseFloat(style.marginLeft) || 0;
-				const marginRight = parseFloat(style.marginRight) || 0;
-				totalHandleSpace += rect.width + marginLeft + marginRight;
+				total += rect.width + (parseFloat(style.marginLeft) || 0) + (parseFloat(style.marginRight) || 0);
 			} else {
-				const marginTop = parseFloat(style.marginTop) || 0;
-				const marginBottom = parseFloat(style.marginBottom) || 0;
-				totalHandleSpace += rect.height + marginTop + marginBottom;
+				total += rect.height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
 			}
 		});
-		
-		return totalHandleSpace;
+		return total;
 	}
 
-	/**
-	 * Enforce container constraints by auto-collapsing panes if needed
-	 */
-	private enforceContainerConstraints() {
-		if (!this.containerRef || this.panes.length === 0) return;
-		
-		const containerRect = this.containerRef.getBoundingClientRect();
-		const containerSize = this.orientation === 'horizontal' ? containerRect.width : containerRect.height;
-		
-		if (containerSize <= 0) return; // Container not rendered yet
-		
-		// Measure actual handle space from DOM
-		const handleSpace = this.measureHandleSpace();
-		
-		// Calculate minimum required space using effective min sizes
-		let minRequired = handleSpace;
-		const collapsiblePanes: Array<{ pane: PaneConfig; effectiveMin: number; index: number }> = [];
-		
-		for (let i = 0; i < this.panes.length; i++) {
-			const pane = this.panes[i];
-			
-			if (this.isCollapsed(pane.id)) {
-				minRequired += pane.collapsedSize ?? 0;
+	private getEffectiveMin(pane: PaneConfig): number {
+		const paneEl = this.getPaneEl(pane.id);
+		if (!paneEl) return pane.minSize;
+
+		const nestedContainer = paneEl.querySelector('[data-resizable-group="true"]');
+		if (!nestedContainer) return pane.minSize;
+
+		let total = 0;
+		nestedContainer.querySelectorAll(':scope > [data-pane-id]').forEach((child) => {
+			if (child.getAttribute('data-collapsed') === 'true') {
+				total += parseFloat(child.getAttribute('data-collapsed-size') || '0');
 			} else {
-				// Get effective min size (accounts for nested pane groups)
-				const paneEl = this.containerRef.querySelector(`[data-pane-id="${pane.id}"]`);
-				const effectiveMin = paneEl 
-					? this.getEffectiveMinSize(paneEl, pane) 
-					: pane.minSize;
-				
-				minRequired += effectiveMin;
-				
-				if (pane.collapsible) {
-					collapsiblePanes.push({ pane, effectiveMin, index: i });
+				const minAttr = child.getAttribute('data-min-size');
+				if (minAttr) {
+					total += parseFloat(minAttr);
+				} else {
+					const style = window.getComputedStyle(child);
+					total += parseFloat(this.orientation === 'horizontal' ? style.minWidth : style.minHeight) || 0;
 				}
 			}
+		});
+
+		total += this.measureHandles(nestedContainer);
+		return Math.max(pane.minSize, total);
+	}
+
+	private calcMinRequired(): number {
+		let total = this.measureHandles();
+		for (const pane of this.panes) {
+			total += this.isCollapsed(pane.id) ? (pane.collapsedSize ?? 0) : this.getEffectiveMin(pane);
 		}
-		
-		// If we're overflowing, collapse panes until we fit
-		if (minRequired > containerSize && collapsiblePanes.length > 0) {
-			// Sort collapsible panes by index (furthest from center first, then edges)
-			// This prefers collapsing edge panes first
-			const sortedCollapsible = [...collapsiblePanes].sort((a, b) => {
-				// Prefer higher indices (rightmost/bottommost) first
-				return b.index - a.index;
-			});
-			
-			let changed = false;
-			
-			for (const { pane, effectiveMin } of sortedCollapsible) {
-				if (minRequired <= containerSize) break;
-				
-				// Collapse this pane
-				const savedSpace = effectiveMin - (pane.collapsedSize ?? 0);
-				this.collapsedPanes.add(pane.id);
-				minRequired -= savedSpace;
-				changed = true;
-			}
-			
-			if (changed) {
-				this.collapsedPanes = new Set(this.collapsedPanes);
-				this.commitLayout();
-			}
+		return total;
+	}
+
+	private enforceConstraints() {
+		if (!this.containerRef || this.panes.length === 0) return;
+
+		const containerSize = this.getContainerSize();
+		if (containerSize <= 0) return;
+
+		let minRequired = this.calcMinRequired();
+		if (minRequired <= containerSize) return;
+
+		const collapsible = this.panes
+			.filter((p) => p.collapsible && !this.isCollapsed(p.id))
+			.map((p, _, arr) => ({ pane: p, index: arr.indexOf(p), min: this.getEffectiveMin(p) }))
+			.sort((a, b) => b.index - a.index);
+
+		let changed = false;
+		for (const { pane, min } of collapsible) {
+			if (minRequired <= containerSize) break;
+			this.collapsedPanes.add(pane.id);
+			minRequired -= min - (pane.collapsedSize ?? 0);
+			changed = true;
+		}
+
+		if (changed) {
+			this.collapsedPanes = new Set(this.collapsedPanes);
+			this.commitLayout();
 		}
 	}
 
 	registerPane(config: PaneConfig) {
 		this.panes = [...this.panes, config];
-		// Only set default size if not already persisted and not a flex pane
 		if (!this.sizes.has(config.id) && !config.flex) {
 			this.sizes.set(config.id, config.defaultSize ?? config.minSize);
 			this.sizes = new Map(this.sizes);
@@ -285,8 +267,7 @@ export class ResizableGroup implements ResizableGroupState {
 	setSize(id: string, size: number) {
 		const pane = this.panes.find((p) => p.id === id);
 		if (!pane) return;
-		const clamped = Math.max(pane.minSize, size);
-		this.sizes.set(id, clamped);
+		this.sizes.set(id, Math.max(pane.minSize, size));
 		this.sizes = new Map(this.sizes);
 	}
 
@@ -295,184 +276,108 @@ export class ResizableGroup implements ResizableGroupState {
 	}
 
 	isFlex(id: string): boolean {
-		const pane = this.panes.find((p) => p.id === id);
-		return pane?.flex ?? false;
+		return this.panes.find((p) => p.id === id)?.flex ?? false;
 	}
 
 	collapse(id: string) {
 		const pane = this.panes.find((p) => p.id === id);
-		if (!pane?.collapsible) return;
-		this.collapsedPanes.add(id);
-		this.collapsedPanes = new Set(this.collapsedPanes);
-		this.commitLayout();
+		if (pane?.collapsible) this.updateCollapsed((s) => s.add(id));
 	}
 
 	expand(id: string) {
-		const paneToExpand = this.panes.find((p) => p.id === id);
-		if (!paneToExpand) return;
-		
-		// Check available space
+		const pane = this.panes.find((p) => p.id === id);
+		if (!pane) return;
+
 		if (this.containerRef) {
-			const containerRect = this.containerRef.getBoundingClientRect();
-			const containerSize = this.orientation === 'horizontal' ? containerRect.width : containerRect.height;
-			
-			// Measure actual handle space
-			const handleSpace = this.measureHandleSpace();
-			
-			// Calculate total min required after expanding this pane (using effective min sizes)
+			const containerSize = this.getContainerSize();
+			const handleSpace = this.measureHandles();
+			const paneIndex = this.panes.indexOf(pane);
+
 			let minRequired = handleSpace;
-			const paneIndex = this.panes.indexOf(paneToExpand);
-			
-			for (let i = 0; i < this.panes.length; i++) {
-				const pane = this.panes[i];
-				const paneEl = this.containerRef.querySelector(`[data-pane-id="${pane.id}"]`);
-				
-				if (pane.id === id) {
-					// This pane will be expanded - use its effective min
-					const effectiveMin = paneEl 
-						? this.getEffectiveMinSize(paneEl, pane) 
-						: pane.minSize;
-					minRequired += effectiveMin;
-				} else if (this.isCollapsed(pane.id)) {
-					minRequired += pane.collapsedSize ?? 0;
+			for (const p of this.panes) {
+				if (p.id === id || !this.isCollapsed(p.id)) {
+					minRequired += this.getEffectiveMin(p);
 				} else {
-					// Use effective min for expanded panes
-					const effectiveMin = paneEl 
-						? this.getEffectiveMinSize(paneEl, pane) 
-						: pane.minSize;
-					minRequired += effectiveMin;
+					minRequired += p.collapsedSize ?? 0;
 				}
 			}
-			
-			// If expanding would overflow, collapse other panes first
+
 			if (minRequired > containerSize) {
-				// Find collapsible panes that aren't this one, sorted by distance from this pane (furthest first)
-				const collapsiblePanes = this.panes
-					.filter(p => p.id !== id && p.collapsible && !this.isCollapsed(p.id))
-					.map(p => {
-						const paneEl = this.containerRef?.querySelector(`[data-pane-id="${p.id}"]`);
-						const effectiveMin = paneEl 
-							? this.getEffectiveMinSize(paneEl, p) 
-							: p.minSize;
-						return { pane: p, index: this.panes.indexOf(p), effectiveMin };
-					})
-					.sort((a, b) => {
-						// Sort by distance from paneToExpand, furthest first
-						const distA = Math.abs(a.index - paneIndex);
-						const distB = Math.abs(b.index - paneIndex);
-						return distB - distA;
-					});
-				
 				let spaceToFree = minRequired - containerSize;
-				
-				for (const { pane, effectiveMin } of collapsiblePanes) {
+
+				const collapsible = this.panes
+					.filter((p) => p.id !== id && p.collapsible && !this.isCollapsed(p.id))
+					.map((p) => ({ pane: p, index: this.panes.indexOf(p), min: this.getEffectiveMin(p) }))
+					.sort((a, b) => Math.abs(b.index - paneIndex) - Math.abs(a.index - paneIndex));
+
+				for (const { pane: p, index, min } of collapsible) {
 					if (spaceToFree <= 0) break;
-					
-					const savedSpace = effectiveMin - (pane.collapsedSize ?? 0);
-					this.collapsedPanes.add(pane.id);
-					spaceToFree -= savedSpace;
+
+					const paneEl = this.getPaneEl(p.id);
+					if (paneEl) {
+						const nested = this.getNestedGroup(paneEl);
+						if (nested) {
+							const side = paneIndex < index ? 'right' : 'left';
+							spaceToFree -= nested.collapsePanesToFree(spaceToFree, side);
+							if (spaceToFree <= 0) continue;
+						}
+					}
+
+					this.collapsedPanes.add(p.id);
+					spaceToFree -= min - (p.collapsedSize ?? 0);
+				}
+
+				if (spaceToFree > 0) {
+					spaceToFree -= this.requestParentCollapse(spaceToFree, paneIndex);
 				}
 			}
 		}
-		
-		// Now expand the target pane
-		this.collapsedPanes.delete(id);
-		this.collapsedPanes = new Set(this.collapsedPanes);
-		this.commitLayout();
+
+		this.updateCollapsed((s) => s.delete(id));
 	}
 
 	toggle(id: string) {
-		if (this.isCollapsed(id)) {
-			this.expand(id);
-		} else {
-			this.collapse(id);
+		this.isCollapsed(id) ? this.expand(id) : this.collapse(id);
+	}
+
+	/** Collapse panes to free space. Returns amount freed. */
+	collapsePanesToFree(amount: number, preferSide: 'left' | 'right'): number {
+		if (!this.containerRef || amount <= 0) return 0;
+
+		const collapsible = this.panes
+			.filter((p) => p.collapsible && !this.isCollapsed(p.id))
+			.map((p) => ({ pane: p, index: this.panes.indexOf(p), min: this.getEffectiveMin(p) }))
+			.sort((a, b) => (preferSide === 'right' ? b.index - a.index : a.index - b.index));
+
+		let freed = 0;
+		for (const { pane, min } of collapsible) {
+			if (freed >= amount) break;
+			this.collapsedPanes.add(pane.id);
+			freed += min - (pane.collapsedSize ?? 0);
 		}
+
+		if (freed > 0) {
+			this.collapsedPanes = new Set(this.collapsedPanes);
+			this.commitLayout();
+		}
+		return freed;
 	}
 
 	getPaneIdAtIndex(index: number): string | null {
-		if (index < 0 || index >= this.panes.length) return null;
-		return this.panes[index].id;
-	}
-
-	/**
-	 * Calculate the effective minimum size of a pane, accounting for nested pane groups
-	 */
-	private getEffectiveMinSize(paneEl: Element, pane: PaneConfig): number {
-		// Find all nested panes within this pane
-		const allNestedPanes = paneEl.querySelectorAll('[data-pane-id]');
-		if (allNestedPanes.length === 0) {
-			return pane.minSize;
-		}
-
-		// Find the immediate nested pane group by looking for panes whose parent 
-		// contains multiple [data-pane-id] children (indicating it's a pane group)
-		let nestedGroupContainer: Element | null = null;
-		for (const nestedPane of allNestedPanes) {
-			const parent = nestedPane.parentElement;
-			if (parent && parent !== paneEl) {
-				const siblingPanes = parent.querySelectorAll(':scope > [data-pane-id]');
-				if (siblingPanes.length > 1) {
-					nestedGroupContainer = parent;
-					break;
-				}
-			}
-		}
-
-		if (!nestedGroupContainer) {
-			return pane.minSize;
-		}
-
-		// Sum up min-width/min-height of all direct child panes in this group
-		let totalMinSize = 0;
-		const childPanes = nestedGroupContainer.querySelectorAll(':scope > [data-pane-id]');
-		
-		childPanes.forEach((childPane) => {
-			const style = window.getComputedStyle(childPane);
-			const minSize = this.orientation === 'horizontal' 
-				? parseFloat(style.minWidth) || 0
-				: parseFloat(style.minHeight) || 0;
-			totalMinSize += minSize;
-		});
-
-		// Count handles (elements with role="separator" that are direct children)
-		const handles = nestedGroupContainer.querySelectorAll(':scope > [role="separator"]');
-		
-		// Measure actual handle sizes including margins
-		handles.forEach((handle) => {
-			const rect = handle.getBoundingClientRect();
-			const style = window.getComputedStyle(handle);
-			
-			if (this.orientation === 'horizontal') {
-				const marginLeft = parseFloat(style.marginLeft) || 0;
-				const marginRight = parseFloat(style.marginRight) || 0;
-				totalMinSize += rect.width + marginLeft + marginRight;
-			} else {
-				const marginTop = parseFloat(style.marginTop) || 0;
-				const marginBottom = parseFloat(style.marginBottom) || 0;
-				totalMinSize += rect.height + marginTop + marginBottom;
-			}
-		});
-
-		// Return the larger of the pane's own minSize or the nested content's minSize
-		return Math.max(pane.minSize, totalMinSize);
+		return this.panes[index]?.id ?? null;
 	}
 
 	startResize(handleIndex: number, event: PointerEvent) {
 		if (!this.containerRef) return;
 		this.isResizing = true;
 		this.resizingHandleIndex = handleIndex;
-		
-		const startPos = this.orientation === 'horizontal' ? event.clientX : event.clientY;
-		this.resizeStartPos = startPos;
-		this.lastMovePos = startPos;
+		this.lastMovePos = this.orientation === 'horizontal' ? event.clientX : event.clientY;
 
-		// Sync tracked sizes to actual rendered sizes
 		for (const p of this.panes) {
-			const paneEl = this.containerRef?.querySelector(`[data-pane-id="${p.id}"]`);
-			if (paneEl) {
-				const rect = paneEl.getBoundingClientRect();
-				const size = this.orientation === 'horizontal' ? rect.width : rect.height;
-				this.sizes.set(p.id, size);
+			const el = this.getPaneEl(p.id);
+			if (el) {
+				const rect = el.getBoundingClientRect();
+				this.sizes.set(p.id, this.orientation === 'horizontal' ? rect.width : rect.height);
 			}
 		}
 		this.sizes = new Map(this.sizes);
@@ -484,236 +389,175 @@ export class ResizableGroup implements ResizableGroupState {
 		event.preventDefault();
 	}
 
-	private lastMovePos = 0;
-
-	/**
-	 * Request space from parent pane groups when we're constrained.
-	 * Uses a synchronous custom event to get space from ancestors.
-	 * Returns the amount of space actually obtained.
-	 */
-	private requestParentResize(amount: number, direction: 'left' | 'right'): number {
-		if (!this.containerRef || amount <= 0) return 0;
-
-		// Create a custom event with a result field that parent can populate
-		const eventDetail = {
-			amount,
-			direction,
-			orientation: this.orientation,
-			spaceProvided: 0 // Parent will update this
-		};
-		
-		const event = new CustomEvent('resizable-request-space', {
-			bubbles: true,
-			cancelable: true,
-			detail: eventDetail
-		});
-
-		this.containerRef.dispatchEvent(event);
-		
-		// Return how much space the parent(s) provided
-		return eventDetail.spaceProvided;
+	private findParentPane(target: Element): { pane: PaneConfig; index: number } | null {
+		for (let i = 0; i < this.panes.length; i++) {
+			const el = this.getPaneEl(this.panes[i].id);
+			if (el?.contains(target)) return { pane: this.panes[i], index: i };
+		}
+		return null;
 	}
 
-	/**
-	 * Handle space requests from nested pane groups.
-	 * This runs synchronously, updating detail.spaceProvided with how much we gave.
-	 */
-	handleNestedSpaceRequest = (event: Event) => {
-		const customEvent = event as CustomEvent<{
+	private requestParentCollapse(amount: number, expandingIndex: number): number {
+		if (!this.containerRef || amount <= 0) return 0;
+		const detail = { amount, expandingPaneIndex: expandingIndex, orientation: this.orientation, spaceFreed: 0 };
+		this.containerRef.dispatchEvent(new CustomEvent('resizable-request-collapse', { bubbles: true, detail }));
+		return detail.spaceFreed;
+	}
+
+	private requestParentResize(amount: number, direction: 'left' | 'right'): number {
+		if (!this.containerRef || amount <= 0) return 0;
+		const detail = { amount, direction, orientation: this.orientation, spaceProvided: 0 };
+		this.containerRef.dispatchEvent(new CustomEvent('resizable-request-space', { bubbles: true, detail }));
+		return detail.spaceProvided;
+	}
+
+	private handleSpaceRequest = (event: Event) => {
+		const { detail } = event as CustomEvent<{
 			amount: number;
 			direction: 'left' | 'right';
 			orientation: 'horizontal' | 'vertical';
 			spaceProvided: number;
 		}>;
+		if (detail.orientation !== this.orientation) return;
 
-		// Only handle if orientation matches
-		if (customEvent.detail.orientation !== this.orientation) return;
+		const parent = this.findParentPane(event.target as Element);
+		if (!parent || !this.containerRef) return;
 
-		// Find the pane that contains the nested group that dispatched this event
-		const target = event.target as Element;
-		let parentPane: PaneConfig | null = null;
-		let parentPaneIndex = -1;
+		const { sizes, mins } = this.measurePanes();
+		const newSizes = [...sizes];
+		let remaining = detail.amount;
 
-		for (let i = 0; i < this.panes.length; i++) {
-			const pane = this.panes[i];
-			const paneEl = this.containerRef?.querySelector(`[data-pane-id="${pane.id}"]`);
-			if (paneEl && paneEl.contains(target)) {
-				parentPane = pane;
-				parentPaneIndex = i;
-				break;
+		const indices =
+			detail.direction === 'left'
+				? Array.from({ length: parent.index }, (_, i) => parent.index - 1 - i)
+				: Array.from({ length: this.panes.length - parent.index - 1 }, (_, i) => parent.index + 1 + i);
+
+		for (const i of indices) {
+			if (remaining <= 0) break;
+			const available = newSizes[i] - mins[i];
+			if (available > 0) {
+				const take = Math.min(available, remaining);
+				newSizes[i] -= take;
+				remaining -= take;
 			}
 		}
 
-		if (!parentPane || parentPaneIndex < 0 || !this.containerRef) return;
-
-		// Try to get space from sibling panes
-		const { amount, direction } = customEvent.detail;
-		let remainingAmount = amount;
-
-		// Get current sizes
-		const currentSizes: number[] = [];
-		const effectiveMins: number[] = [];
-
-		for (const p of this.panes) {
-			const paneEl = this.containerRef.querySelector(`[data-pane-id="${p.id}"]`);
-			if (paneEl) {
-				const rect = paneEl.getBoundingClientRect();
-				currentSizes.push(this.orientation === 'horizontal' ? rect.width : rect.height);
-				effectiveMins.push(this.getEffectiveMinSize(paneEl, p));
-			} else {
-				currentSizes.push(this.getSize(p.id));
-				effectiveMins.push(p.minSize);
-			}
+		let freed = detail.amount - remaining;
+		if (remaining > 0) {
+			freed += this.requestParentResize(remaining, detail.direction);
 		}
 
-		const newSizes = [...currentSizes];
-
-		if (direction === 'left') {
-			// Nested group wants to expand right, needs space from left siblings
-			for (let i = parentPaneIndex - 1; i >= 0 && remainingAmount > 0; i--) {
-				const available = newSizes[i] - effectiveMins[i];
-				if (available > 0) {
-					const take = Math.min(available, remainingAmount);
-					newSizes[i] -= take;
-					remainingAmount -= take;
-				}
-			}
-		} else {
-			// Nested group wants to expand left, needs space from right siblings
-			for (let i = parentPaneIndex + 1; i < this.panes.length && remainingAmount > 0; i++) {
-				const available = newSizes[i] - effectiveMins[i];
-				if (available > 0) {
-					const take = Math.min(available, remainingAmount);
-					newSizes[i] -= take;
-					remainingAmount -= take;
-				}
-			}
+		if (freed > 0) {
+			newSizes[parent.index] += freed;
+			this.panes.forEach((p, i) => this.setSize(p.id, newSizes[i]));
 		}
 
-		// Calculate how much space we freed locally
-		let locallyFreed = amount - remainingAmount;
-		
-		// If we still need more, ask our parent
-		if (remainingAmount > 0) {
-			const fromAncestor = this.requestParentResize(remainingAmount, direction);
-			locallyFreed += fromAncestor;
-			remainingAmount -= fromAncestor;
-		}
-
-		// Give freed space to the parent pane
-		if (locallyFreed > 0) {
-			newSizes[parentPaneIndex] += locallyFreed;
-
-			// Apply sizes
-			for (let i = 0; i < this.panes.length; i++) {
-				this.setSize(this.panes[i].id, newSizes[i]);
-			}
-		}
-		
-		// Report back how much space we provided (locally + from ancestors)
-		customEvent.detail.spaceProvided += locallyFreed;
-		
-		// Always stop propagation - we handle cascading ourselves
+		detail.spaceProvided += freed;
 		event.stopPropagation();
 	};
 
-	/**
-	 * Helper to get current live sizes and effective mins from DOM
-	 */
-	private measurePaneSizes(): { sizes: number[]; mins: number[] } {
+	private handleCollapseRequest = (event: Event) => {
+		const { detail } = event as CustomEvent<{
+			amount: number;
+			expandingPaneIndex: number;
+			orientation: 'horizontal' | 'vertical';
+			spaceFreed: number;
+		}>;
+		if (detail.orientation !== this.orientation) return;
+
+		const parent = this.findParentPane(event.target as Element);
+		if (!parent || !this.containerRef) return;
+
+		const collapsible = this.panes
+			.filter((p) => p.id !== parent.pane.id && p.collapsible && !this.isCollapsed(p.id))
+			.map((p) => ({ pane: p, index: this.panes.indexOf(p), min: this.getEffectiveMin(p) }))
+			.sort((a, b) => {
+				const distDiff = Math.abs(b.index - parent.index) - Math.abs(a.index - parent.index);
+				if (distDiff !== 0) return distDiff;
+				return detail.expandingPaneIndex > 0 ? a.index - b.index : b.index - a.index;
+			});
+
+		let remaining = detail.amount;
+		let freed = 0;
+
+		for (const { pane, min } of collapsible) {
+			if (remaining <= 0) break;
+			this.collapsedPanes.add(pane.id);
+			const saved = min - (pane.collapsedSize ?? 0);
+			remaining -= saved;
+			freed += saved;
+		}
+
+		if (freed > 0) {
+			this.collapsedPanes = new Set(this.collapsedPanes);
+			this.commitLayout();
+		}
+
+		if (remaining > 0) {
+			freed += this.requestParentCollapse(remaining, parent.index);
+		}
+
+		detail.spaceFreed += freed;
+		event.stopPropagation();
+	};
+
+	private measurePanes(): { sizes: number[]; mins: number[] } {
 		const sizes: number[] = [];
 		const mins: number[] = [];
-		
 		for (const p of this.panes) {
-			const paneEl = this.containerRef?.querySelector(`[data-pane-id="${p.id}"]`);
-			if (paneEl) {
-				const rect = paneEl.getBoundingClientRect();
+			const el = this.getPaneEl(p.id);
+			if (el) {
+				const rect = el.getBoundingClientRect();
 				sizes.push(this.orientation === 'horizontal' ? rect.width : rect.height);
-				mins.push(this.getEffectiveMinSize(paneEl, p));
+				mins.push(this.getEffectiveMin(p));
 			} else {
 				sizes.push(this.getSize(p.id));
 				mins.push(p.minSize);
 			}
 		}
-		
 		return { sizes, mins };
 	}
 
 	private handleMove = (event: PointerEvent) => {
 		if (this.resizingHandleIndex < 0 || !this.containerRef) return;
 
-		const currentPos = this.orientation === 'horizontal' ? event.clientX : event.clientY;
-		
-		// Use incremental delta from last position, not from start
-		// This allows smooth, continuous resizing that adapts to current state
-		const delta = currentPos - this.lastMovePos;
-		this.lastMovePos = currentPos;
+		const pos = this.orientation === 'horizontal' ? event.clientX : event.clientY;
+		const delta = pos - this.lastMovePos;
+		this.lastMovePos = pos;
 
-		if (Math.abs(delta) < 1) return; // Ignore tiny movements
+		if (Math.abs(delta) < 1) return;
 
-		const handleIndex = this.resizingHandleIndex;
-
-		// Get current live sizes from DOM
-		const { sizes: currentSizes, mins: effectiveMins } = this.measurePaneSizes();
-		const newSizes = [...currentSizes];
+		const { sizes, mins } = this.measurePanes();
+		const newSizes = [...sizes];
+		const idx = this.resizingHandleIndex;
 
 		if (delta > 0) {
-			// Expanding left side (panel at handleIndex): take space from right panels
-			let remainingDelta = delta;
-
-			// Take from right panels, closest first
-			for (let i = handleIndex + 1; i < this.panes.length && remainingDelta > 0; i++) {
-				const available = newSizes[i] - effectiveMins[i];
-				if (available > 0) {
-					const take = Math.min(available, remainingDelta);
+			let rem = delta;
+			for (let i = idx + 1; i < this.panes.length && rem > 0; i++) {
+				const avail = newSizes[i] - mins[i];
+				if (avail > 0) {
+					const take = Math.min(avail, rem);
 					newSizes[i] -= take;
-					remainingDelta -= take;
+					rem -= take;
 				}
 			}
-
-			// If we couldn't take enough locally, request from parent
-			// Parent will shrink its siblings and grow our container
-			// The space it provides becomes available for our expanding pane
-			if (remainingDelta > 0) {
-				const spaceFromParent = this.requestParentResize(remainingDelta, 'right');
-				remainingDelta -= spaceFromParent;
-			}
-
-			// Give all obtained space (local + from parent) to the expanding pane
-			const actualDelta = delta - remainingDelta;
-			newSizes[handleIndex] += actualDelta;
-
-		} else if (delta < 0) {
-			// Expanding right side (panel at handleIndex + 1): take space from left panels
-			let remainingDelta = Math.abs(delta);
-
-			// Take from left panels, closest first
-			for (let i = handleIndex; i >= 0 && remainingDelta > 0; i--) {
-				const available = newSizes[i] - effectiveMins[i];
-				if (available > 0) {
-					const take = Math.min(available, remainingDelta);
+			if (rem > 0) rem -= this.requestParentResize(rem, 'right');
+			newSizes[idx] += delta - rem;
+		} else {
+			let rem = -delta;
+			for (let i = idx; i >= 0 && rem > 0; i--) {
+				const avail = newSizes[i] - mins[i];
+				if (avail > 0) {
+					const take = Math.min(avail, rem);
 					newSizes[i] -= take;
-					remainingDelta -= take;
+					rem -= take;
 				}
 			}
-
-			// If we couldn't take enough locally, request from parent
-			if (remainingDelta > 0) {
-				const spaceFromParent = this.requestParentResize(remainingDelta, 'left');
-				remainingDelta -= spaceFromParent;
-			}
-
-			// Give all obtained space (local + from parent) to the expanding pane
-			const actualDelta = Math.abs(delta) - remainingDelta;
-			if (handleIndex + 1 < this.panes.length) {
-				newSizes[handleIndex + 1] += actualDelta;
-			}
+			if (rem > 0) rem -= this.requestParentResize(rem, 'left');
+			if (idx + 1 < this.panes.length) newSizes[idx + 1] += -delta - rem;
 		}
 
-		// Apply all new sizes
-		for (let i = 0; i < this.panes.length; i++) {
-			this.setSize(this.panes[i].id, newSizes[i]);
-		}
+		this.panes.forEach((p, i) => this.setSize(p.id, newSizes[i]));
 	};
 
 	private stopResize = () => {

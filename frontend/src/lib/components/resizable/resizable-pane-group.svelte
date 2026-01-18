@@ -44,6 +44,10 @@
 	});
 </script>
 
-<div bind:this={containerRef} class="flex min-h-0 min-w-0 {orientation === 'horizontal' ? 'flex-row' : 'flex-col'} {className}">
+<div
+	bind:this={containerRef}
+	data-resizable-group="true"
+	class="flex min-h-0 min-w-0 {orientation === 'horizontal' ? 'flex-row' : 'flex-col'} {className}"
+>
 	{@render children()}
 </div>
