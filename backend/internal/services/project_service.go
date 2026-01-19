@@ -351,7 +351,7 @@ func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath
 	}
 	includes, err := projects.ParseIncludes(composeFile)
 	if err != nil {
-		slog.WarnContext(ctx, "Failed to parse includes", "error", err, "path", projectPath)
+		slog.ErrorContext(ctx, "Failed to parse includes", "error", err, "path", projectPath)
 		return
 	}
 	resp.IncludeFiles = includes
@@ -360,7 +360,7 @@ func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath
 func (s *ProjectService) enrichWithCustomFiles(ctx context.Context, projectPath string, resp *project.Details) {
 	files, err := projects.ParseCustomFiles(projectPath, s.getAllowedExternalPaths(ctx))
 	if err != nil {
-		slog.WarnContext(ctx, "Failed to parse custom files", "error", err, "path", projectPath)
+		slog.ErrorContext(ctx, "Failed to parse custom files", "error", err, "path", projectPath)
 		return
 	}
 	resp.CustomFiles = files
