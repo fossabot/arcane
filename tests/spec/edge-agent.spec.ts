@@ -36,7 +36,6 @@ test.describe("Edge Agent Environment", () => {
 
   test("should create an edge agent environment and show deployment snippets", async ({ page }) => {
     const environmentName = `edge-agent-${Date.now().toString().slice(-6)}`;
-    const expectedApiUrl = `edge://${slugifyEdgeName(environmentName)}`;
     let createdEnvironmentId: string | null = null;
 
     await page.route("**/api/environments", async (route) => {
