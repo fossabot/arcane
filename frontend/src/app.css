@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import '@squircle/tailwindcss';
 
 @variant dark (&:where(.dark, .dark *));
 
@@ -154,6 +155,8 @@
 	--font-sans: 'Geist', system-ui, sans-serif;
 	--font-mono: 'Geist Mono', monospace;
 	--font-serif: Calistoga;
+
+	--blur-2xs: 2px; 
 }
 
 @layer base {

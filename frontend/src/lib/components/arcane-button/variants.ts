@@ -26,6 +26,7 @@ import {
 
 export const arcaneButtonVariants = tv({
 	base:
+		'backdrop-blur-[2px] text-foreground bg-white/10 dark:bg-surface/10 border border-primary/10 dark:border-surface/10 ' +
 		'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium whitespace-nowrap select-none ' +
 		'transition-all duration-200 ' +
 		'active:scale-[0.98] ' +
