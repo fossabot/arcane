@@ -915,7 +915,9 @@
 															{m.common_open()}
 														</ContextMenu.Item>
 														{#if leftPaneFile !== 'compose'}
-															<ContextMenu.Item onclick={() => addToSplitView('compose')}>{m.project_open_in_split_view()}</ContextMenu.Item>
+															<ContextMenu.Item onclick={() => addToSplitView('compose')}
+																>{m.project_open_in_split_view()}</ContextMenu.Item
+															>
 														{/if}
 														{#if rightPaneFile === 'compose'}
 															<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item>
@@ -939,7 +941,9 @@
 															{m.common_open()}
 														</ContextMenu.Item>
 														{#if leftPaneFile !== 'env'}
-															<ContextMenu.Item onclick={() => addToSplitView('env')}>{m.project_open_in_split_view()}</ContextMenu.Item>
+															<ContextMenu.Item onclick={() => addToSplitView('env')}
+																>{m.project_open_in_split_view()}</ContextMenu.Item
+															>
 														{/if}
 														{#if rightPaneFile === 'env'}
 															<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item>
@@ -973,7 +977,8 @@
 																	</ContextMenu.Item>
 																{/if}
 																{#if rightPaneFile === includeFile.path}
-																	<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item>
+																	<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item
+																	>
 																{/if}
 															</ContextMenu.Content>
 														</ContextMenu.Root>
@@ -1007,7 +1012,8 @@
 																	</ContextMenu.Item>
 																{/if}
 																{#if rightPaneFile === customFileKey}
-																	<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item>
+																	<ContextMenu.Item onclick={removeFromSplitView}>{m.project_close_split_pane()}</ContextMenu.Item
+																	>
 																{/if}
 																<ContextMenu.Separator />
 																<ContextMenu.Item onclick={() => handleRemoveCustomFile(customFile.path)} variant="destructive">

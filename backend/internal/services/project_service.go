@@ -1672,7 +1672,7 @@ func (s *ProjectService) mapProjectToDto(ctx context.Context, p models.Project, 
 }
 
 func (s *ProjectService) getProjectMetadataFromPath(ctx context.Context, projectPath string) libproject.ArcaneComposeMetadata {
-	composeFile, err := projects.DetectComposeFile(projectPath)
+	composeFile, err := fs.DetectComposeFile(projectPath)
 	if err != nil {
 		return libproject.ArcaneComposeMetadata{ServiceIcons: map[string]string{}}
 	}
