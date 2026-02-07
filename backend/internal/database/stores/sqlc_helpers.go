@@ -822,7 +822,7 @@ func mapAppriseSettingFromPG(row *pgdb.AppriseSetting) *notification.AppriseSett
 		return nil
 	}
 	return &notification.AppriseSettings{
-		ID:                 uint(row.ID),
+		ID:                 uint(row.ID), //nolint:gosec // IDs are non-negative in the database
 		APIURL:             row.ApiUrl,
 		Enabled:            boolFromPgBool(row.Enabled),
 		ImageUpdateTag:     stringFromPgText(row.ImageUpdateTag),
@@ -837,7 +837,7 @@ func mapAppriseSettingFromSQLite(row *sqlitedb.AppriseSetting) *notification.App
 		return nil
 	}
 	return &notification.AppriseSettings{
-		ID:                 uint(row.ID),
+		ID:                 uint(row.ID), //nolint:gosec // IDs are non-negative in the database
 		APIURL:             row.ApiUrl,
 		Enabled:            nullIntToBool(row.Enabled),
 		ImageUpdateTag:     stringFromNull(row.ImageUpdateTag),
@@ -852,7 +852,7 @@ func mapNotificationSettingFromPG(row *pgdb.NotificationSetting) notification.No
 		return notification.NotificationSettings{}
 	}
 	return notification.NotificationSettings{
-		ID:        uint(row.ID),
+		ID:        uint(row.ID), //nolint:gosec // IDs are non-negative in the database
 		Provider:  notification.NotificationProvider(row.Provider),
 		Enabled:   boolFromPgBool(row.Enabled),
 		Config:    row.Config,
@@ -866,7 +866,7 @@ func mapNotificationSettingFromSQLite(row *sqlitedb.NotificationSetting) notific
 		return notification.NotificationSettings{}
 	}
 	return notification.NotificationSettings{
-		ID:        uint(row.ID),
+		ID:        uint(row.ID), //nolint:gosec // IDs are non-negative in the database
 		Provider:  notification.NotificationProvider(row.Provider),
 		Enabled:   row.Enabled.Valid && row.Enabled.Bool,
 		Config:    row.Config,

@@ -14,7 +14,6 @@ import (
 
 	"github.com/getarcaneapp/arcane/backend/internal/database"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
-	bootstraputils "github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pagination"
 	"github.com/getarcaneapp/arcane/types/event"
@@ -91,15 +90,15 @@ func (s *GitOpsSyncService) enrichSyncRepositories(ctx context.Context, syncs []
 	return nil
 }
 
-func (s *GitOpsSyncService) ListSyncIntervalsRaw(ctx context.Context) ([]bootstraputils.IntervalMigrationItem, error) {
+func (s *GitOpsSyncService) ListSyncIntervalsRaw(ctx context.Context) ([]utils.IntervalMigrationItem, error) {
 	syncs, err := s.store.ListGitOpsSyncs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load git sync intervals: %w", err)
 	}
 
-	items := make([]bootstraputils.IntervalMigrationItem, 0, len(syncs))
+	items := make([]utils.IntervalMigrationItem, 0, len(syncs))
 	for _, sync := range syncs {
-		items = append(items, bootstraputils.IntervalMigrationItem{
+		items = append(items, utils.IntervalMigrationItem{
 			ID:       sync.ID,
 			RawValue: strconv.Itoa(sync.SyncInterval),
 		})

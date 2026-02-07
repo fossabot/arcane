@@ -94,7 +94,7 @@ func (s *SqlcStore) SaveImageUpdateRecord(ctx context.Context, record imageupdat
 			CurrentDigest:    nullableTextPtrKeepEmpty(record.CurrentDigest),
 			LatestDigest:     nullableTextPtrKeepEmpty(record.LatestDigest),
 			CheckTime:        nullableTimestamptz(checkTime),
-			ResponseTimeMs:   int32(record.ResponseTimeMs),
+			ResponseTimeMs:   int32(record.ResponseTimeMs), //nolint:gosec // response times are bounded by request duration
 			LastError:        nullableTextPtrKeepEmpty(record.LastError),
 			AuthMethod:       nullableTextPtrKeepEmpty(record.AuthMethod),
 			AuthUsername:     nullableTextPtrKeepEmpty(record.AuthUsername),

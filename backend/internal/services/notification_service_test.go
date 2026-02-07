@@ -158,7 +158,7 @@ func TestNotificationService_MigrateDiscordWebhookUrlToFields_NoDiscordConfig(t 
 	// Verify no settings were created
 	settings, err := store.ListNotificationSettings(ctx)
 	require.NoError(t, err)
-	require.Len(t, settings, 0)
+	require.Empty(t, settings)
 }
 
 func TestNotificationService_MigrateDiscordWebhookUrlToFields_InvalidWebhookUrl(t *testing.T) {

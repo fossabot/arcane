@@ -127,7 +127,6 @@ func (s *dbMigrationStore) DownTo(ctx context.Context, version int64) error {
 	return nil
 }
 
-
 func (s *dbMigrationStore) Redo(ctx context.Context) error {
 	if err := s.db.MigrateRedo(ctx); err != nil {
 		return fmt.Errorf("failed to redo latest migration: %w", err)

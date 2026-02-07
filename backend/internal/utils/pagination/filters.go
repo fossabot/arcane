@@ -93,10 +93,7 @@ func matchValue[T any](item T, value string, accessor *FilterAccessor[T]) bool {
 				return true
 			}
 		}
-		if !seenNonEmpty {
-			return true
-		}
-		return false
+		return !seenNonEmpty
 	}
 	return accessor.Fn(item, value)
 }

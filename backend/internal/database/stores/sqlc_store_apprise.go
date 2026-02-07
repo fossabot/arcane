@@ -55,7 +55,7 @@ func (s *SqlcStore) UpsertAppriseSettings(ctx context.Context, apiURL string, en
 			return mapAppriseSettingFromPG(row), nil
 		}
 		row, err := s.pg.UpdateAppriseSettings(ctx, pgdb.UpdateAppriseSettingsParams{
-			ID:                 int32(current.ID),
+			ID:                 int32(current.ID), //nolint:gosec // IDs are non-negative in the database
 			ApiUrl:             apiURL,
 			Enabled:            boolToPgBool(enabled),
 			ImageUpdateTag:     nullableText(imageUpdateTag),
@@ -83,7 +83,7 @@ func (s *SqlcStore) UpsertAppriseSettings(ctx context.Context, apiURL string, en
 			Enabled:            boolToNullInt(enabled),
 			ImageUpdateTag:     nullableString(imageUpdateTag),
 			ContainerUpdateTag: nullableString(containerUpdateTag),
-			ID:                 int64(current.ID),
+			ID:                 int64(current.ID), //nolint:gosec // IDs are non-negative in the database
 		})
 		if err != nil {
 			return nil, err

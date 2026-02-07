@@ -173,7 +173,7 @@ func migrateDatabase(ctx context.Context, db *DB, dbProvider string) error {
 	results, err := provider.Up(ctx)
 	if err != nil {
 		if _, rollbackErr := provider.DownTo(ctx, lastGoodVersion); rollbackErr != nil {
-			return fmt.Errorf("migration failed: %w (rollback failed: %v)", err, rollbackErr)
+			return fmt.Errorf("migration failed and rollback failed: %w", errors.Join(err, rollbackErr))
 		}
 		return fmt.Errorf("failed to apply migrations: %w", err)
 	}

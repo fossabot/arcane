@@ -240,6 +240,7 @@ func (s *SqlcStore) SaveUser(ctx context.Context, user user.ModelUser) (*user.Mo
 	}
 }
 
+//nolint:gocognit // TODO: refactor transactional flow to reduce complexity.
 func (s *SqlcStore) AttachOidcSubjectTransactional(ctx context.Context, userID string, subject string, updateFn func(u *user.ModelUser)) (*user.ModelUser, error) {
 	switch s.driver {
 	case "postgres":

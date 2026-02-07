@@ -277,6 +277,7 @@ func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, id string, u
 	return nil
 }
 
+//nolint:gocognit // TODO: refactor update parsing to reduce complexity.
 func buildEnvironmentPatchInput(id string, updates map[string]interface{}) (database.EnvironmentPatchInput, error) {
 	patch := database.EnvironmentPatchInput{ID: id}
 

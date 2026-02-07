@@ -27,7 +27,7 @@ type MigrationStatusOutput struct {
 }
 
 type MigrationDownInput struct {
-	EnvironmentID string               `path:"id" doc:"Environment ID"`
+	EnvironmentID string                `path:"id" doc:"Environment ID"`
 	Body          migration.DownRequest `doc:"Migration rollback request"`
 }
 
@@ -36,7 +36,7 @@ type MigrationDownOutput struct {
 }
 
 type MigrationDownToInput struct {
-	EnvironmentID string                 `path:"id" doc:"Environment ID"`
+	EnvironmentID string                  `path:"id" doc:"Environment ID"`
 	Body          migration.DownToRequest `doc:"Migration rollback request"`
 }
 

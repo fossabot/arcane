@@ -28,8 +28,8 @@ func (s *SqlcStore) CreateProject(ctx context.Context, project project.Project) 
 			DirName:         nullableTextPtrKeepEmpty(project.DirName),
 			Path:            project.Path,
 			Status:          string(project.Status),
-			ServiceCount:    int32(project.ServiceCount),
-			RunningCount:    int32(project.RunningCount),
+			ServiceCount:    int32(project.ServiceCount), //nolint:gosec // counts are bounded by project services
+			RunningCount:    int32(project.RunningCount), //nolint:gosec // counts are bounded by project services
 			StatusReason:    nullableTextPtrKeepEmpty(project.StatusReason),
 			GitopsManagedBy: nullableTextPtrKeepEmpty(project.GitOpsManagedBy),
 			CreatedAt:       nullableTimestamptz(createdAt),
@@ -159,8 +159,8 @@ func (s *SqlcStore) SaveProject(ctx context.Context, project project.Project) (*
 			DirName:         nullableTextPtrKeepEmpty(project.DirName),
 			Path:            project.Path,
 			Status:          string(project.Status),
-			ServiceCount:    int32(project.ServiceCount),
-			RunningCount:    int32(project.RunningCount),
+			ServiceCount:    int32(project.ServiceCount), //nolint:gosec // counts are bounded by project services
+			RunningCount:    int32(project.RunningCount), //nolint:gosec // counts are bounded by project services
 			StatusReason:    nullableTextPtrKeepEmpty(project.StatusReason),
 			GitopsManagedBy: nullableTextPtrKeepEmpty(project.GitOpsManagedBy),
 			UpdatedAt:       nullableTimestamptzPtr(updatedAt),
@@ -241,8 +241,8 @@ func (s *SqlcStore) UpdateProjectStatusAndCounts(ctx context.Context, id string,
 	case "postgres":
 		return s.pg.UpdateProjectStatusAndCounts(ctx, pgdb.UpdateProjectStatusAndCountsParams{
 			Status:       string(status),
-			ServiceCount: int32(serviceCount),
-			RunningCount: int32(runningCount),
+			ServiceCount: int32(serviceCount), //nolint:gosec // counts are bounded by project services
+			RunningCount: int32(runningCount), //nolint:gosec // counts are bounded by project services
 			UpdatedAt:    nullableTimestamptz(updatedAt),
 			ID:           id,
 		})
@@ -263,7 +263,7 @@ func (s *SqlcStore) UpdateProjectServiceCount(ctx context.Context, id string, se
 	switch s.driver {
 	case "postgres":
 		return s.pg.UpdateProjectServiceCount(ctx, pgdb.UpdateProjectServiceCountParams{
-			ServiceCount: int32(serviceCount),
+			ServiceCount: int32(serviceCount), //nolint:gosec // counts are bounded by project services
 			ID:           id,
 		})
 	case "sqlite":

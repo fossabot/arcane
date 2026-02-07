@@ -86,7 +86,7 @@ func (s *SqlcStore) UpsertNotificationSetting(ctx context.Context, provider noti
 			return &setting, nil
 		}
 		row, err := s.pg.UpdateNotificationSetting(ctx, pgdb.UpdateNotificationSettingParams{
-			ID:      int32(current.ID),
+			ID:      int32(current.ID), //nolint:gosec // IDs are non-negative in the database
 			Enabled: boolToPgBool(enabled),
 			Config:  config,
 		})
@@ -111,7 +111,7 @@ func (s *SqlcStore) UpsertNotificationSetting(ctx context.Context, provider noti
 		row, err := s.sqlite.UpdateNotificationSetting(ctx, sqlitedb.UpdateNotificationSettingParams{
 			Enabled: sql.NullBool{Bool: enabled, Valid: true},
 			Config:  config,
-			ID:      int64(current.ID),
+			ID:      int64(current.ID), //nolint:gosec // IDs are non-negative in the database
 		})
 		if err != nil {
 			return nil, err

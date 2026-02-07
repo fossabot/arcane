@@ -913,10 +913,7 @@ func (s *VolumeService) ListBackupsPaginated(ctx context.Context, volumeName str
 	if sortKey == "" {
 		sortKey = "createdAt"
 	}
-	desc := true
-	if params.Order == pagination.SortAsc {
-		desc = false
-	}
+	desc := params.Order != pagination.SortAsc
 	sort.Slice(filtered, func(i, j int) bool {
 		left := filtered[i]
 		right := filtered[j]

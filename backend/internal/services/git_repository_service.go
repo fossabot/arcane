@@ -187,6 +187,7 @@ func (s *GitRepositoryService) CreateRepository(ctx context.Context, req gitops.
 	return created, nil
 }
 
+//nolint:gocognit // TODO: refactor update flow to reduce complexity.
 func (s *GitRepositoryService) UpdateRepository(ctx context.Context, id string, req gitops.UpdateGitRepositoryRequest) (*gitops.ModelGitRepository, error) {
 	repository, err := s.GetRepositoryByID(ctx, id)
 	if err != nil {

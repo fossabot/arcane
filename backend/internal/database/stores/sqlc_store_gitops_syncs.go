@@ -32,7 +32,7 @@ func (s *SqlcStore) CreateGitOpsSync(ctx context.Context, sync gitops.ModelGitOp
 			ProjectName:    sync.ProjectName,
 			ProjectID:      nullableTextPtrKeepEmpty(sync.ProjectID),
 			AutoSync:       sync.AutoSync,
-			SyncInterval:   int32(sync.SyncInterval),
+			SyncInterval:   int32(sync.SyncInterval), //nolint:gosec // sync interval bounded by config
 			LastSyncAt:     nullableTimestamptzPtr(sync.LastSyncAt),
 			LastSyncStatus: nullableTextPtrKeepEmpty(sync.LastSyncStatus),
 			LastSyncError:  nullableTextPtrKeepEmpty(sync.LastSyncError),
@@ -196,7 +196,7 @@ func (s *SqlcStore) SaveGitOpsSync(ctx context.Context, sync gitops.ModelGitOpsS
 			ProjectName:    sync.ProjectName,
 			ProjectID:      nullableTextPtrKeepEmpty(sync.ProjectID),
 			AutoSync:       sync.AutoSync,
-			SyncInterval:   int32(sync.SyncInterval),
+			SyncInterval:   int32(sync.SyncInterval), //nolint:gosec // sync interval bounded by config
 			LastSyncAt:     nullableTimestamptzPtr(sync.LastSyncAt),
 			LastSyncStatus: nullableTextPtrKeepEmpty(sync.LastSyncStatus),
 			LastSyncError:  nullableTextPtrKeepEmpty(sync.LastSyncError),
@@ -264,7 +264,7 @@ func (s *SqlcStore) UpdateGitOpsSyncInterval(ctx context.Context, id string, min
 	switch s.driver {
 	case "postgres":
 		return s.pg.UpdateGitOpsSyncInterval(ctx, pgdb.UpdateGitOpsSyncIntervalParams{
-			SyncInterval: int32(minutes),
+			SyncInterval: int32(minutes), //nolint:gosec // sync interval bounded by config
 			ID:           id,
 		})
 	case "sqlite":

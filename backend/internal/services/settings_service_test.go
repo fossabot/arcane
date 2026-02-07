@@ -57,7 +57,7 @@ func TestSettingsService_EnsureDefaultSettings_Idempotent(t *testing.T) {
 
 	settings2, err := store.ListSettings(ctx)
 	require.NoError(t, err)
-	require.Equal(t, len(settings1), len(settings2))
+	require.Len(t, settings2, len(settings1))
 
 	// Spot-check a couple keys exist
 	for _, key := range []string{"authLocalEnabled", "projectsDirectory"} {

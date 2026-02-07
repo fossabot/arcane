@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -27,7 +28,7 @@ func (s *SqlcStore) WithSettingsTx(ctx context.Context, fn func(tx SettingsStore
 				slog.DebugContext(ctx, "Database transaction rollback", "driver", "postgres", "error", err, "rollback_error", rollbackErr)
 			}
 			if rollbackErr != nil {
-				return fmt.Errorf("transaction failed: %w (rollback failed: %v)", err, rollbackErr)
+				return fmt.Errorf("transaction failed and rollback failed: %w", errors.Join(err, rollbackErr))
 			}
 			return err
 		}
@@ -51,7 +52,7 @@ func (s *SqlcStore) WithSettingsTx(ctx context.Context, fn func(tx SettingsStore
 				slog.DebugContext(ctx, "Database transaction rollback", "driver", "sqlite", "error", err, "rollback_error", rollbackErr)
 			}
 			if rollbackErr != nil {
-				return fmt.Errorf("transaction failed: %w (rollback failed: %v)", err, rollbackErr)
+				return fmt.Errorf("transaction failed and rollback failed: %w", errors.Join(err, rollbackErr))
 			}
 			return err
 		}

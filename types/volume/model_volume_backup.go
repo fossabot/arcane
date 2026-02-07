@@ -15,7 +15,7 @@ type VolumeBackup struct {
 
 func (b *VolumeBackup) ToDTO() BackupEntry {
 	return BackupEntry{
-		ID:         b.BaseModel.ID,
+		ID:         b.ID,
 		VolumeName: b.VolumeName,
 		Size:       b.Size,
 		CreatedAt:  b.CreatedAt.Format(time.RFC3339),

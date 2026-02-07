@@ -160,6 +160,7 @@ func (s *SqlcStore) FindEnvironmentIDByApiKeyHash(ctx context.Context, keyHash s
 	}
 }
 
+//nolint:gocognit // TODO: refactor patch logic to reduce complexity.
 func (s *SqlcStore) PatchEnvironment(ctx context.Context, input EnvironmentPatchInput) (*environment.ModelEnvironment, error) {
 	switch s.driver {
 	case "postgres":

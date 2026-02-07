@@ -26,7 +26,6 @@ import (
 	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/env"
 	"github.com/getarcaneapp/arcane/types/template"
-	tmpl "github.com/getarcaneapp/arcane/types/template"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
@@ -39,7 +38,7 @@ type remoteCache struct {
 
 type registryFetchMeta struct {
 	LastModified string
-	Templates    []tmpl.RemoteTemplate
+	Templates    []template.RemoteTemplate
 }
 
 type TemplateService struct {
@@ -148,15 +147,15 @@ func (s *TemplateService) GetAllTemplates(ctx context.Context) ([]template.Compo
 	return s.getMergedTemplates(ctx)
 }
 
-func (s *TemplateService) GetAllTemplatesPaginated(ctx context.Context, params pagination.QueryParams) ([]tmpl.Template, pagination.Response, error) {
+func (s *TemplateService) GetAllTemplatesPaginated(ctx context.Context, params pagination.QueryParams) ([]template.Template, pagination.Response, error) {
 	templates, err := s.getMergedTemplates(ctx)
 	if err != nil {
 		return nil, pagination.Response{}, err
 	}
 
-	items := make([]tmpl.Template, 0, len(templates))
+	items := make([]template.Template, 0, len(templates))
 	for _, t := range templates {
-		var dtoItem tmpl.Template
+		var dtoItem template.Template
 		if err := mapper.MapStruct(&t, &dtoItem); err != nil {
 			slog.WarnContext(ctx, "failed to map template to DTO", "error", err, "templateID", t.ID)
 			continue
@@ -164,33 +163,33 @@ func (s *TemplateService) GetAllTemplatesPaginated(ctx context.Context, params p
 		items = append(items, dtoItem)
 	}
 
-	config := pagination.Config[tmpl.Template]{
-		SearchAccessors: []pagination.SearchAccessor[tmpl.Template]{
-			func(t tmpl.Template) (string, error) { return t.Name, nil },
-			func(t tmpl.Template) (string, error) { return t.Description, nil },
-			func(t tmpl.Template) (string, error) {
+	config := pagination.Config[template.Template]{
+		SearchAccessors: []pagination.SearchAccessor[template.Template]{
+			func(t template.Template) (string, error) { return t.Name, nil },
+			func(t template.Template) (string, error) { return t.Description, nil },
+			func(t template.Template) (string, error) {
 				if t.Metadata != nil && len(t.Metadata.Tags) > 0 {
 					return strings.Join(t.Metadata.Tags, " "), nil
 				}
 				return "", nil
 			},
 		},
-		SortBindings: []pagination.SortBinding[tmpl.Template]{
+		SortBindings: []pagination.SortBinding[template.Template]{
 			{
 				Key: "name",
-				Fn: func(a, b tmpl.Template) int {
+				Fn: func(a, b template.Template) int {
 					return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 				},
 			},
 			{
 				Key: "description",
-				Fn: func(a, b tmpl.Template) int {
+				Fn: func(a, b template.Template) int {
 					return strings.Compare(strings.ToLower(a.Description), strings.ToLower(b.Description))
 				},
 			},
 			{
 				Key: "isRemote",
-				Fn: func(a, b tmpl.Template) int {
+				Fn: func(a, b template.Template) int {
 					if a.IsRemote == b.IsRemote {
 						return 0
 					}
@@ -201,10 +200,10 @@ func (s *TemplateService) GetAllTemplatesPaginated(ctx context.Context, params p
 				},
 			},
 		},
-		FilterAccessors: []pagination.FilterAccessor[tmpl.Template]{
+		FilterAccessors: []pagination.FilterAccessor[template.Template]{
 			{
 				Key: "type",
-				Fn: func(item tmpl.Template, filterValue string) bool {
+				Fn: func(item template.Template, filterValue string) bool {
 					switch filterValue {
 					case "true":
 						return item.IsRemote
@@ -538,7 +537,7 @@ func (s *TemplateService) doGET(ctx context.Context, url string) ([]byte, error)
 
 // fetchRegistryTemplates performs a conditional GET using If-Modified-Since.
 // If the server replies 304 Not Modified, cached templates for the registry are reused.
-func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *template.ModelTemplateRegistry) ([]tmpl.RemoteTemplate, error) {
+func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *template.ModelTemplateRegistry) ([]template.RemoteTemplate, error) {
 	s.registryMu.RLock()
 	fetchMeta := s.registryFetchMeta[reg.ID]
 	s.registryMu.RUnlock()
@@ -572,7 +571,7 @@ func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *templ
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	var regDTO tmpl.RemoteRegistry
+	var regDTO template.RemoteRegistry
 	if err := json.Unmarshal(body, &regDTO); err != nil {
 		return nil, fmt.Errorf("parse registry JSON: %w", err)
 	}
@@ -589,12 +588,12 @@ func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *templ
 	return regDTO.Templates, nil
 }
 
-func (s *TemplateService) fetchRegistryManifest(ctx context.Context, url string) (*tmpl.RemoteRegistry, error) {
+func (s *TemplateService) fetchRegistryManifest(ctx context.Context, url string) (*template.RemoteRegistry, error) {
 	body, err := s.doGET(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	var reg tmpl.RemoteRegistry
+	var reg template.RemoteRegistry
 	if err := json.Unmarshal(body, &reg); err != nil {
 		return nil, fmt.Errorf("failed to parse registry JSON: %w", err)
 	}
@@ -604,7 +603,7 @@ func (s *TemplateService) fetchRegistryManifest(ctx context.Context, url string)
 	return &reg, nil
 }
 
-func (s *TemplateService) convertRemoteToLocal(remote tmpl.RemoteTemplate, registry *template.ModelTemplateRegistry) template.ComposeTemplate {
+func (s *TemplateService) convertRemoteToLocal(remote template.RemoteTemplate, registry *template.ModelTemplateRegistry) template.ComposeTemplate {
 	publicID := makeRemoteID(registry.ID, remote.ID)
 
 	return template.ComposeTemplate{
@@ -1043,13 +1042,13 @@ func (s *TemplateService) ParseComposeServices(ctx context.Context, composeConte
 }
 
 // GetTemplateContentWithParsedData returns template content along with parsed metadata
-func (s *TemplateService) GetTemplateContentWithParsedData(ctx context.Context, id string) (*tmpl.TemplateContent, error) {
+func (s *TemplateService) GetTemplateContentWithParsedData(ctx context.Context, id string) (*template.TemplateContent, error) {
 	composeTemplate, err := s.GetTemplate(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	var outTemplate tmpl.Template
+	var outTemplate template.Template
 	if mapErr := mapper.MapStruct(composeTemplate, &outTemplate); mapErr != nil {
 		return nil, fmt.Errorf("failed to map template: %w", mapErr)
 	}
@@ -1077,7 +1076,7 @@ func (s *TemplateService) GetTemplateContentWithParsedData(ctx context.Context, 
 		envVars[i] = env.Variable{Key: v.Key, Value: v.Value}
 	}
 
-	return &tmpl.TemplateContent{
+	return &template.TemplateContent{
 		Template:     outTemplate,
 		Content:      composeContent,
 		EnvContent:   envContent,
