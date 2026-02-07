@@ -6,13 +6,6 @@ import (
 	"strings"
 )
 
-func CapitalizeFirstLetter(str string) string {
-	if len(str) == 0 {
-		return str
-	}
-	return strings.ToUpper(str[:1]) + str[1:]
-}
-
 func CamelCaseToSnakeCase(str string) string {
 	var result strings.Builder
 	for i, r := range str {

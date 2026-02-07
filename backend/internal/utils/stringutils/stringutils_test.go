@@ -6,28 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCapitalizeFirstLetter(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"empty string", "", ""},
-		{"single lowercase", "a", "A"},
-		{"single uppercase", "A", "A"},
-		{"word starting with lowercase", "hello", "Hello"},
-		{"word starting with uppercase", "Hello", "Hello"},
-		{"sentence", "hello world", "Hello world"},
-		{"starts with number", "123hello", "123hello"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, CapitalizeFirstLetter(tt.input))
-		})
-	}
-}
-
 func TestCamelCaseToSnakeCase(t *testing.T) {
 	tests := []struct {
 		name     string
