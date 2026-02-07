@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	"github.com/nicholas-fedor/shoutrrr/pkg/services/chat/telegram"
 )
 
 // BuildTelegramURL converts TelegramConfig to Shoutrrr URL format using shoutrrr's Config
-func BuildTelegramURL(config models.TelegramConfig) (string, error) {
+func BuildTelegramURL(config notification.TelegramConfig) (string, error) {
 	telegramConfig := &telegram.Config{
 		Token:        config.BotToken,
 		Chats:        config.ChatIDs,
@@ -38,7 +38,7 @@ func BuildTelegramURL(config models.TelegramConfig) (string, error) {
 }
 
 // SendTelegram sends a message via Shoutrrr Telegram using proper service configuration
-func SendTelegram(ctx context.Context, config models.TelegramConfig, message string) error {
+func SendTelegram(ctx context.Context, config notification.TelegramConfig, message string) error {
 	if config.BotToken == "" {
 		return fmt.Errorf("telegram bot token is empty")
 	}

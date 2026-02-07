@@ -78,7 +78,7 @@ type ArcaneApiEndpoints struct {
 	VolumesSizesEndpoint  string
 	VolumeUsageEndpoint   string
 
-	// Projects (Stacks)
+	// Projects
 	ProjectsEndpoint        string
 	ProjectEndpoint         string
 	ProjectsCountsEndpoint  string
@@ -100,6 +100,12 @@ type ArcaneApiEndpoints struct {
 	SystemContainersStartStoppedEndpoint string
 	SystemUpgradeCheckEndpoint           string
 	SystemUpgradeEndpoint                string
+
+	// Migrations
+	MigrateStatusEndpoint string
+	MigrateDownEndpoint   string
+	MigrateDownToEndpoint string
+	MigrateRedoEndpoint   string
 
 	// Updater
 	UpdaterStatusEndpoint  string
@@ -260,6 +266,12 @@ var Endpoints = ArcaneApiEndpoints{
 	SystemContainersStartStoppedEndpoint: "/api/environments/%s/system/containers/start-stopped",
 	SystemUpgradeCheckEndpoint:           "/api/environments/%s/system/upgrade/check",
 	SystemUpgradeEndpoint:                "/api/environments/%s/system/upgrade",
+
+	// Migrations
+	MigrateStatusEndpoint: "/api/environments/%s/migrate/status",
+	MigrateDownEndpoint:   "/api/environments/%s/migrate/down",
+	MigrateDownToEndpoint: "/api/environments/%s/migrate/down-to",
+	MigrateRedoEndpoint:   "/api/environments/%s/migrate/redo",
 
 	// Updater
 	UpdaterStatusEndpoint:  "/api/environments/%s/updater/status",
@@ -510,6 +522,20 @@ func (e ArcaneApiEndpoints) SystemUpgradeCheck(envID string) string {
 }
 func (e ArcaneApiEndpoints) SystemUpgrade(envID string) string {
 	return fmt.Sprintf(e.SystemUpgradeEndpoint, envID)
+}
+
+// Migration endpoints
+func (e ArcaneApiEndpoints) MigrateStatus(envID string) string {
+	return fmt.Sprintf(e.MigrateStatusEndpoint, envID)
+}
+func (e ArcaneApiEndpoints) MigrateDown(envID string) string {
+	return fmt.Sprintf(e.MigrateDownEndpoint, envID)
+}
+func (e ArcaneApiEndpoints) MigrateDownTo(envID string) string {
+	return fmt.Sprintf(e.MigrateDownToEndpoint, envID)
+}
+func (e ArcaneApiEndpoints) MigrateRedo(envID string) string {
+	return fmt.Sprintf(e.MigrateRedoEndpoint, envID)
 }
 
 // Updater endpoints

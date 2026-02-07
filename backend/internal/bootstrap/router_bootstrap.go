@@ -145,6 +145,7 @@ func setupRouter(ctx context.Context, cfg *config.Config, appServices *Services)
 		CustomizeSearch:   appServices.CustomizeSearch,
 		System:            appServices.System,
 		SystemUpgrade:     appServices.SystemUpgrade,
+		Migration:         appServices.Migration,
 		GitRepository:     appServices.GitRepository,
 		GitOpsSync:        appServices.GitOpsSync,
 		Config:            cfg,

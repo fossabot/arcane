@@ -6,14 +6,14 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 // BuildGotifyURL converts GotifyConfig to Shoutrrr URL format
 // URL example: gotify://host[:port][/path]/token[?query]
-func BuildGotifyURL(config models.GotifyConfig) (string, error) {
+func BuildGotifyURL(config notification.GotifyConfig) (string, error) {
 	if config.Host == "" {
 		return "", fmt.Errorf("gotify host is required")
 	}
@@ -56,7 +56,7 @@ func BuildGotifyURL(config models.GotifyConfig) (string, error) {
 }
 
 // SendGotify sends a message via Shoutrrr Gotify using proper service configuration
-func SendGotify(ctx context.Context, config models.GotifyConfig, message string) error {
+func SendGotify(ctx context.Context, config notification.GotifyConfig, message string) error {
 	shoutrrrURL, err := BuildGotifyURL(config)
 	if err != nil {
 		return fmt.Errorf("failed to build shoutrrr Gotify URL: %w", err)

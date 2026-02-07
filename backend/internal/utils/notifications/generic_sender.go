@@ -6,13 +6,13 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 // BuildGenericURL converts GenericConfig to Shoutrrr URL format for generic webhooks
-func BuildGenericURL(config models.GenericConfig) (string, error) {
+func BuildGenericURL(config notification.GenericConfig) (string, error) {
 	if config.WebhookURL == "" {
 		return "", fmt.Errorf("webhook URL is empty")
 	}
@@ -101,7 +101,7 @@ func BuildGenericURL(config models.GenericConfig) (string, error) {
 }
 
 // SendGenericWithTitle sends a message with title via Shoutrrr Generic webhook
-func SendGenericWithTitle(ctx context.Context, config models.GenericConfig, title, message string) error {
+func SendGenericWithTitle(ctx context.Context, config notification.GenericConfig, title, message string) error {
 	if config.WebhookURL == "" {
 		return fmt.Errorf("webhook URL is empty")
 	}

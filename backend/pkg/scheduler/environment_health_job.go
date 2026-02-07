@@ -48,23 +48,8 @@ func (j *EnvironmentHealthJob) Schedule(ctx context.Context) string {
 func (j *EnvironmentHealthJob) Run(ctx context.Context) {
 	slog.InfoContext(ctx, "environment health check started")
 
-	// Get all environments using the DB directly
-	db := j.environmentService.GetDB()
-	var environments []struct {
-		ID      string
-		Name    string
-		Enabled bool
-	}
-
-	if err := db.WithContext(ctx).
-		Model(&struct {
-			ID      string `gorm:"column:id"`
-			Name    string `gorm:"column:name"`
-			Enabled bool   `gorm:"column:enabled"`
-		}{}).
-		Table("environments").
-		Where("enabled = ?", true).
-		Find(&environments).Error; err != nil {
+	environments, err := j.environmentService.ListEnabledEnvironments(ctx)
+	if err != nil {
 		slog.ErrorContext(ctx, "failed to list environments for health check", "error", err)
 		return
 	}

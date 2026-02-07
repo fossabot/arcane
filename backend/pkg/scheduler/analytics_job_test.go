@@ -3,33 +3,40 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	glsqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 )
 
 func setupAnalyticsSettingsService(t *testing.T) *services.SettingsService {
 	t.Helper()
 	ctx := context.Background()
-	db, err := gorm.Open(glsqlite.Open(":memory:"), &gorm.Config{})
+	db, err := database.Initialize(ctx, testAnalyticsSQLiteDSN(t))
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.SettingVariable{}))
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
 
-	svc, err := services.NewSettingsService(ctx, &database.DB{DB: db})
+	svc, err := services.NewSettingsService(ctx, store)
 	require.NoError(t, err)
 	require.NoError(t, svc.SetStringSetting(ctx, "instanceId", "test-instance"))
 
 	return svc
+}
+
+func testAnalyticsSQLiteDSN(t *testing.T) string {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	return fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
 }
 
 func newHeartbeatServer(t *testing.T) (*httptest.Server, <-chan []byte) {

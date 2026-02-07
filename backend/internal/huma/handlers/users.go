@@ -6,7 +6,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/types/base"
@@ -199,14 +198,14 @@ func (h *UserHandler) CreateUser(ctx context.Context, input *CreateUserInput) (*
 		return nil, huma.Error500InternalServerError((&common.PasswordHashError{Err: err}).Error())
 	}
 
-	userModel := &models.User{
+	userModel := &user.ModelUser{
 		Username:     input.Body.Username,
 		PasswordHash: hashedPassword,
 		DisplayName:  input.Body.DisplayName,
 		Email:        input.Body.Email,
 		Roles:        input.Body.Roles,
 		Locale:       input.Body.Locale,
-		BaseModel: models.BaseModel{
+		BaseModel: base.BaseModel{
 			CreatedAt: time.Now(),
 		},
 	}
@@ -220,7 +219,7 @@ func (h *UserHandler) CreateUser(ctx context.Context, input *CreateUserInput) (*
 		return nil, huma.Error500InternalServerError((&common.UserCreationError{Err: err}).Error())
 	}
 
-	out, err := mapper.MapOne[*models.User, user.User](createdUser)
+	out, err := mapper.MapOne[*user.ModelUser, user.User](createdUser)
 	if err != nil {
 		return nil, huma.Error500InternalServerError((&common.UserMappingError{Err: err}).Error())
 	}
@@ -248,7 +247,7 @@ func (h *UserHandler) GetUser(ctx context.Context, input *GetUserInput) (*GetUse
 		return nil, huma.Error404NotFound((&common.UserNotFoundError{}).Error())
 	}
 
-	out, err := mapper.MapOne[*models.User, user.User](userModel)
+	out, err := mapper.MapOne[*user.ModelUser, user.User](userModel)
 	if err != nil {
 		return nil, huma.Error500InternalServerError((&common.UserMappingError{Err: err}).Error())
 	}
@@ -305,7 +304,7 @@ func (h *UserHandler) UpdateUser(ctx context.Context, input *UpdateUserInput) (*
 		return nil, huma.Error500InternalServerError((&common.UserUpdateError{Err: err}).Error())
 	}
 
-	out, err := mapper.MapOne[*models.User, user.User](updatedUser)
+	out, err := mapper.MapOne[*user.ModelUser, user.User](updatedUser)
 	if err != nil {
 		return nil, huma.Error500InternalServerError((&common.UserMappingError{Err: err}).Error())
 	}

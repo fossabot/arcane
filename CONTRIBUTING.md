@@ -180,6 +180,63 @@ just format frontend
 ./scripts/development/dev.sh shell backend
 ```
 
+## 🗄️ Database Development (sqlc + Goose)
+
+Arcane now uses **Goose** for migrations and **sqlc** for typed query generation.
+Do not add new GORM models, tags, or GORM-based data access.
+
+### When changing schema
+
+1. Add a new migration file for both engines with the same version number:
+   - `backend/resources/migrations/goose_sqlite/`
+   - `backend/resources/migrations/goose_postgres/`
+2. Include both `-- +goose Up` and `-- +goose Down`.
+3. Keep SQLite/PostgreSQL behavior aligned unless a dialect-specific difference is required.
+
+### When changing queries
+
+1. Update SQL files in:
+   - `backend/internal/database/queries/sqlite/`
+   - `backend/internal/database/queries/postgres/`
+2. Regenerate sqlc code:
+
+```bash
+just sqlc
+```
+
+3. Commit generated files under:
+   - `backend/internal/database/models/sqlitedb/`
+   - `backend/internal/database/models/pgdb/`
+
+### Validation checklist for DB changes
+
+```bash
+# Regenerate query code
+just sqlc
+
+# Run backend tests
+cd backend && go test ./...
+
+# (Recommended) run end-to-end tests
+just test e2e
+```
+
+### Migration operations
+
+```bash
+# Show migration status
+cd backend && go run ./cmd/main.go migrate status
+
+# Roll back one migration
+cd backend && go run ./cmd/main.go migrate down 1
+
+# Roll back to a specific version
+cd backend && go run ./cmd/main.go migrate down-to 32
+
+# Re-run latest migration
+cd backend && go run ./cmd/main.go migrate redo
+```
+
 ## 🎨 Code Quality
 
 ### Automatic Formatting & Linting

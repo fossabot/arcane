@@ -2,8 +2,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -11,29 +13,18 @@ import (
 	"strings"
 	"time"
 
-	glsqlite "github.com/glebarez/sqlite"
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database"
-	postgresMigrate "github.com/golang-migrate/migrate/v4/database/postgres"
-	sqliteMigrate "github.com/golang-migrate/migrate/v4/database/sqlite3"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	_ "modernc.org/sqlite"
 
 	"github.com/getarcaneapp/arcane/backend/resources"
 )
 
 type DB struct {
-	*gorm.DB
-}
-
-var (
-	customGormLogger logger.Interface
-)
-
-func SetGormLogger(l logger.Interface) {
-	customGormLogger = l
+	sqlDB    *sql.DB
+	pgPool   *pgxpool.Pool
+	provider string
 }
 
 func Initialize(ctx context.Context, databaseURL string) (*DB, error) {
@@ -46,56 +37,51 @@ func Initialize(ctx context.Context, databaseURL string) (*DB, error) {
 		return nil, err
 	}
 
-	// Get underlying sql.DB for migrations
-	sqlDB, err := db.DB.DB()
+	dbProvider, err := db.resolveProvider()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get sql.DB: %w", err)
-	}
-
-	// Determine database provider for migrations
-	var dbProvider string
-	switch {
-	case strings.HasPrefix(databaseURL, "file:"):
-		dbProvider = "sqlite"
-	case strings.HasPrefix(databaseURL, "postgres"):
-		dbProvider = "postgres"
-	default:
-		return nil, fmt.Errorf("unsupported database type in URL: %s", databaseURL)
-	}
-
-	// Choose the correct driver for migrations
-	var driver database.Driver
-	switch dbProvider {
-	case "sqlite":
-		driver, err = sqliteMigrate.WithInstance(sqlDB, &sqliteMigrate.Config{})
-	case "postgres":
-		driver, err = postgresMigrate.WithInstance(sqlDB, &postgresMigrate.Config{})
-	default:
-		return nil, fmt.Errorf("unsupported database provider: %s", dbProvider)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create migration driver: %w", err)
+		return nil, err
 	}
 
 	// Run migrations
-	if err := migrateDatabase(driver, dbProvider); err != nil {
+	if err := migrateDatabase(ctx, db, dbProvider); err != nil {
 		slog.Error("Failed to run migrations", "error", err)
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
 	// Set connection pool settings
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	if db.sqlDB == nil {
+		return nil, fmt.Errorf("missing sql.DB for database connection")
+	}
+	db.sqlDB.SetMaxIdleConns(10)
+	db.sqlDB.SetMaxOpenConns(100)
+	db.sqlDB.SetConnMaxLifetime(time.Hour)
 
 	return db, nil
 }
 
+func Connect(ctx context.Context, databaseURL string) (*DB, error) {
+	db, err := connectDatabase(ctx, databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+	if db.sqlDB == nil {
+		return nil, fmt.Errorf("missing sql.DB for database connection")
+	}
+	db.sqlDB.SetMaxIdleConns(10)
+	db.sqlDB.SetMaxOpenConns(100)
+	db.sqlDB.SetConnMaxLifetime(time.Hour)
+	return db, nil
+}
+
 func connectDatabase(ctx context.Context, databaseURL string) (*DB, error) {
-	var dialector gorm.Dialector
+	var driverName string
+	var dsn string
+	var provider string
 
 	switch {
 	case strings.HasPrefix(databaseURL, "file:"):
+		provider = "sqlite"
+		driverName = "sqlite"
 		connString, err := parseSqliteConnectionString(databaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse SQLite connection string: %w", err)
@@ -103,30 +89,46 @@ func connectDatabase(ctx context.Context, databaseURL string) (*DB, error) {
 		if err := ensureSQLiteDirectory(connString); err != nil {
 			return nil, fmt.Errorf("failed to prepare SQLite directory: %w", err)
 		}
-		dialector = glsqlite.Open(connString)
+		dsn = connString
 	case strings.HasPrefix(databaseURL, "postgres"):
-		dialector = postgres.Open(databaseURL)
+		provider = "postgres"
+		driverName = "pgx"
+		dsn = databaseURL
 	default:
 		return nil, fmt.Errorf("unsupported database type in URL: %s", databaseURL)
 	}
 
 	// Retry connection up to 3 times
-	var db *gorm.DB
+	var sqlDB *sql.DB
 	var err error
 	for i := 1; i <= 3; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		db, err = gorm.Open(dialector, &gorm.Config{
-			Logger: customGormLogger,
-			NowFunc: func() time.Time {
-				return time.Now().UTC()
-			},
-			PrepareStmt:                      true,
-			IgnoreRelationshipsWhenMigrating: true,
-		})
+		sqlDB, err = sql.Open(driverName, dsn)
 		if err == nil {
-			return &DB{db}, nil
+			pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			pingErr := sqlDB.PingContext(pingCtx)
+			cancel()
+			if pingErr != nil {
+				_ = sqlDB.Close()
+				err = pingErr
+			} else {
+				var pgPool *pgxpool.Pool
+				if provider == "postgres" {
+					pgPool, err = pgxpool.New(ctx, databaseURL)
+					if err != nil {
+						_ = sqlDB.Close()
+						return nil, fmt.Errorf("failed to create pgx pool: %w", err)
+					}
+				}
+
+				return &DB{
+					sqlDB:    sqlDB,
+					pgPool:   pgPool,
+					provider: provider,
+				}, nil
+			}
 		}
 
 		slog.Info("Failed to initialize database", "attempt", i)
@@ -142,31 +144,167 @@ func connectDatabase(ctx context.Context, databaseURL string) (*DB, error) {
 	return nil, err
 }
 
-func migrateDatabase(driver database.Driver, dbProvider string) error {
-	source, err := iofs.New(resources.FS, "migrations/"+dbProvider)
-	if err != nil {
-		return fmt.Errorf("failed to create embedded migration source: %w", err)
+func migrateDatabase(ctx context.Context, db *DB, dbProvider string) error {
+	if db == nil || db.sqlDB == nil {
+		return fmt.Errorf("missing sql.DB for migrations")
+	}
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation start", "provider", dbProvider, "operation", "up")
 	}
 
-	m, err := migrate.NewWithInstance("iofs", source, "arcane", driver)
+	provider, err := newGooseProvider(dbProvider, db.sqlDB)
 	if err != nil {
-		return fmt.Errorf("failed to create migration instance: %w", err)
+		return err
 	}
 
-	err = m.Up()
-	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+	if _, err := provider.GetDBVersion(ctx); err != nil && !errors.Is(err, goose.ErrVersionNotFound) {
+		return fmt.Errorf("failed to initialize goose version table: %w", err)
+	}
+
+	if err := seedGooseFromSchemaMigrations(ctx, db.sqlDB, dbProvider); err != nil {
+		return fmt.Errorf("failed to seed goose migrations: %w", err)
+	}
+
+	lastGoodVersion, err := provider.GetDBVersion(ctx)
+	if err != nil && !errors.Is(err, goose.ErrVersionNotFound) {
+		return fmt.Errorf("failed to read goose db version: %w", err)
+	}
+
+	results, err := provider.Up(ctx)
+	if err != nil {
+		if _, rollbackErr := provider.DownTo(ctx, lastGoodVersion); rollbackErr != nil {
+			return fmt.Errorf("migration failed: %w (rollback failed: %v)", err, rollbackErr)
+		}
 		return fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
-	if errors.Is(err, migrate.ErrNoChange) {
-		version, dirty, versionErr := m.Version()
-		if versionErr != nil {
-			slog.Info("Database schema is up to date")
-		} else {
-			slog.Info("Database schema is up to date", "migrationVersion", version, "dirty", dirty)
-		}
+	if len(results) == 0 {
+		slog.Info("Database schema is up to date")
 	} else {
-		slog.Info("Database migrations completed successfully")
+		slog.Info("Database migrations completed successfully", "applied", len(results))
+	}
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation complete", "provider", dbProvider, "operation", "up", "applied", len(results))
+	}
+
+	return nil
+}
+
+func newGooseProvider(dbProvider string, sqlDB *sql.DB) (*goose.Provider, error) {
+	if sqlDB == nil {
+		return nil, fmt.Errorf("sql.DB is nil")
+	}
+
+	var dialect goose.Dialect
+	var subDir string
+	switch dbProvider {
+	case "sqlite":
+		dialect = goose.DialectSQLite3
+		subDir = "migrations/goose_sqlite"
+	case "postgres":
+		dialect = goose.DialectPostgres
+		subDir = "migrations/goose_postgres"
+	default:
+		return nil, fmt.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	fsys, err := fs.Sub(resources.FS, subDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embedded goose migration source: %w", err)
+	}
+
+	return goose.NewProvider(dialect, sqlDB, fsys)
+}
+
+func seedGooseFromSchemaMigrations(ctx context.Context, sqlDB *sql.DB, dbProvider string) error {
+	switch dbProvider {
+	case "sqlite":
+		return seedGooseFromSchemaMigrationsSQLite(ctx, sqlDB)
+	case "postgres":
+		return seedGooseFromSchemaMigrationsPostgres(ctx, sqlDB)
+	default:
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
+	}
+}
+
+func seedGooseFromSchemaMigrationsPostgres(ctx context.Context, sqlDB *sql.DB) error {
+	var schemaExists bool
+	if err := sqlDB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'schema_migrations')").Scan(&schemaExists); err != nil {
+		return fmt.Errorf("failed to check schema_migrations table: %w", err)
+	}
+	if !schemaExists {
+		return nil
+	}
+
+	var gooseMax int64
+	if err := sqlDB.QueryRowContext(ctx, "SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version").Scan(&gooseMax); err != nil {
+		return fmt.Errorf("failed to check goose_db_version table: %w", err)
+	}
+	if gooseMax > 0 {
+		return nil
+	}
+
+	query := `
+WITH latest AS (
+  SELECT COALESCE(MAX(version), 0) AS version
+  FROM schema_migrations
+  WHERE dirty = false
+),
+series AS (
+  SELECT generate_series(1, (SELECT version FROM latest)) AS version_id
+)
+INSERT INTO goose_db_version (version_id, is_applied)
+SELECT series.version_id, true
+FROM series
+WHERE NOT EXISTS (
+  SELECT 1 FROM goose_db_version g WHERE g.version_id = series.version_id
+);`
+
+	if _, err := sqlDB.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("failed to seed goose_db_version from schema_migrations: %w", err)
+	}
+
+	return nil
+}
+
+func seedGooseFromSchemaMigrationsSQLite(ctx context.Context, sqlDB *sql.DB) error {
+	var schemaExists bool
+	if err := sqlDB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')").Scan(&schemaExists); err != nil {
+		return fmt.Errorf("failed to check schema_migrations table: %w", err)
+	}
+	if !schemaExists {
+		return nil
+	}
+
+	var gooseMax int64
+	if err := sqlDB.QueryRowContext(ctx, "SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version").Scan(&gooseMax); err != nil {
+		return fmt.Errorf("failed to check goose_db_version table: %w", err)
+	}
+	if gooseMax > 0 {
+		return nil
+	}
+
+	query := `
+WITH RECURSIVE
+  max_version AS (
+    SELECT COALESCE(MAX(version), 0) AS v
+    FROM schema_migrations
+    WHERE dirty = 0
+  ),
+  seq(x) AS (
+    SELECT 1 FROM max_version WHERE v >= 1
+    UNION ALL
+    SELECT x + 1 FROM seq, max_version WHERE x < v
+  )
+INSERT INTO goose_db_version (version_id, is_applied)
+SELECT x, 1
+FROM seq
+WHERE NOT EXISTS (
+  SELECT 1 FROM goose_db_version g WHERE g.version_id = x
+);`
+
+	if _, err := sqlDB.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("failed to seed goose_db_version from schema_migrations: %w", err)
 	}
 
 	return nil
@@ -212,30 +350,148 @@ func parseSqliteConnectionString(connString string) (string, error) {
 	return connStringUrl.String(), nil
 }
 
-// FindEnvironmentIDByApiKey finds the environment ID that is associated with the given API key.
-// It queries the api_keys table to validate the key and find the associated environment.
-func (db *DB) FindEnvironmentIDByApiKey(ctx context.Context, apiKey string) (string, error) {
-	var envID string
-	err := db.WithContext(ctx).Table("environments").
-		Select("environments.id").
-		Joins("INNER JOIN api_keys ON api_keys.id = environments.api_key_id").
-		Where("api_keys.key = ?", apiKey).
-		Pluck("environments.id", &envID).Error
+func (db *DB) SqlDB() *sql.DB {
+	if db == nil {
+		return nil
+	}
+	return db.sqlDB
+}
+
+func (db *DB) PgPool() *pgxpool.Pool {
+	if db == nil {
+		return nil
+	}
+	return db.pgPool
+}
+
+func (db *DB) MigrateDown(ctx context.Context, steps int) error {
+	if steps <= 0 {
+		return fmt.Errorf("steps must be greater than 0")
+	}
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation start", "operation", "down", "steps", steps)
+	}
+	provider, err := db.gooseProvider(ctx)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < steps; i++ {
+		if _, err := provider.Down(ctx); err != nil {
+			if errors.Is(err, goose.ErrNoNextVersion) {
+				return nil
+			}
+			return err
+		}
+	}
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation complete", "operation", "down", "steps", steps)
+	}
+	return nil
+}
+
+func (db *DB) MigrateDownTo(ctx context.Context, version int64) error {
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation start", "operation", "down-to", "version", version)
+	}
+	provider, err := db.gooseProvider(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = provider.DownTo(ctx, version)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation complete", "operation", "down-to", "version", version, "error", err)
+	}
+	return err
+}
+
+func (db *DB) MigrateStatus(ctx context.Context) ([]*goose.MigrationStatus, error) {
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation start", "operation", "status")
+	}
+	provider, err := db.gooseProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status, err := provider.Status(ctx)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation complete", "operation", "status", "entries", len(status), "error", err)
+	}
+	return status, err
+}
+
+func (db *DB) MigrateRedo(ctx context.Context) error {
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation start", "operation", "redo")
+	}
+	provider, err := db.gooseProvider(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		return err
+	}
+	_, err = provider.UpByOne(ctx)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database migration operation complete", "operation", "redo", "error", err)
+	}
+	return err
+}
+
+// FindEnvironmentIDByApiKey finds the environment ID associated with the provided API key hash.
+func (db *DB) FindEnvironmentIDByApiKey(ctx context.Context, apiKeyHash string) (string, error) {
+	if db == nil || db.sqlDB == nil {
+		return "", fmt.Errorf("database connection is not initialized")
+	}
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "Database query", "driver", db.provider, "op", "query_row", "operation", "FindEnvironmentIDByApiKey", "key_hash_len", len(apiKeyHash))
+	}
+
+	provider, err := db.resolveProvider()
 	if err != nil {
 		return "", err
 	}
-	if envID == "" {
-		return "", gorm.ErrRecordNotFound
+
+	query := `
+SELECT environments.id
+FROM environments
+INNER JOIN api_keys ON api_keys.id = environments.api_key_id
+WHERE api_keys.key_hash = ?
+LIMIT 1;
+`
+	if provider == "postgres" {
+		query = `
+SELECT environments.id
+FROM environments
+INNER JOIN api_keys ON api_keys.id = environments.api_key_id
+WHERE api_keys.key_hash = $1
+LIMIT 1;
+`
 	}
+
+	var envID string
+	if err := db.sqlDB.QueryRowContext(ctx, query, apiKeyHash).Scan(&envID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", sql.ErrNoRows
+		}
+		return "", err
+	}
+
 	return envID, nil
 }
 
 func (db *DB) Close() error {
-	sqlDB, err := db.DB.DB()
-	if err != nil {
-		return err
+	if db == nil {
+		return nil
 	}
-	return sqlDB.Close()
+	var closeErr error
+	if db.pgPool != nil {
+		db.pgPool.Close()
+	}
+	if db.sqlDB != nil {
+		closeErr = db.sqlDB.Close()
+	}
+	return closeErr
 }
 
 // Create parent directory for file-based SQLite if needed
@@ -264,4 +520,48 @@ func ensureSQLiteDirectory(connString string) error {
 		return nil
 	}
 	return os.MkdirAll(dir, 0o755)
+}
+
+func (db *DB) gooseProvider(ctx context.Context) (*goose.Provider, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database is nil")
+	}
+	if db.sqlDB == nil {
+		return nil, fmt.Errorf("sql.DB is nil")
+	}
+	provider, err := db.resolveProvider()
+	if err != nil {
+		return nil, err
+	}
+	gooseProvider, err := newGooseProvider(provider, db.sqlDB)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := gooseProvider.GetDBVersion(ctx); err != nil && !errors.Is(err, goose.ErrVersionNotFound) {
+		return nil, fmt.Errorf("failed to initialize goose version table: %w", err)
+	}
+	if err := seedGooseFromSchemaMigrations(ctx, db.sqlDB, provider); err != nil {
+		return nil, fmt.Errorf("failed to seed goose migrations: %w", err)
+	}
+	return gooseProvider, nil
+}
+
+func (db *DB) resolveProvider() (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("database is nil")
+	}
+
+	if db.provider != "" {
+		return db.provider, nil
+	}
+
+	if db.pgPool != nil {
+		return "postgres", nil
+	}
+
+	if db.sqlDB != nil {
+		return "sqlite", nil
+	}
+
+	return "", fmt.Errorf("unable to determine database provider")
 }

@@ -6,7 +6,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/notification"
@@ -195,7 +194,7 @@ func (h *NotificationHandler) GetNotificationSettings(ctx context.Context, input
 	if err := checkAdmin(ctx); err != nil {
 		return nil, err
 	}
-	provider := models.NotificationProvider(input.Provider)
+	provider := notification.NotificationProvider(input.Provider)
 
 	settings, err := h.notificationService.GetSettingsByProvider(ctx, provider)
 	if err != nil {
@@ -216,8 +215,8 @@ func (h *NotificationHandler) CreateOrUpdateNotificationSettings(ctx context.Con
 	if err := checkAdmin(ctx); err != nil {
 		return nil, err
 	}
-	provider := models.NotificationProvider(input.Body.Provider)
-	if !models.IsValidNotificationProvider(provider) {
+	provider := notification.NotificationProvider(input.Body.Provider)
+	if !notification.IsValidNotificationProvider(provider) {
 		return nil, huma.Error400BadRequest((&common.InvalidNotificationProviderError{}).Error())
 	}
 
@@ -225,7 +224,7 @@ func (h *NotificationHandler) CreateOrUpdateNotificationSettings(ctx context.Con
 		ctx,
 		provider,
 		input.Body.Enabled,
-		models.JSON(input.Body.Config),
+		base.JSON(input.Body.Config),
 	)
 	if err != nil {
 		return nil, huma.Error500InternalServerError((&common.NotificationSettingsUpdateError{Err: err}).Error())
@@ -245,7 +244,7 @@ func (h *NotificationHandler) DeleteNotificationSettings(ctx context.Context, in
 	if err := checkAdmin(ctx); err != nil {
 		return nil, err
 	}
-	provider := models.NotificationProvider(input.Provider)
+	provider := notification.NotificationProvider(input.Provider)
 
 	if err := h.notificationService.DeleteSettings(ctx, provider); err != nil {
 		return nil, huma.Error500InternalServerError((&common.NotificationSettingsDeletionError{Err: err}).Error())
@@ -263,7 +262,7 @@ func (h *NotificationHandler) TestNotification(ctx context.Context, input *TestN
 	if err := checkAdmin(ctx); err != nil {
 		return nil, err
 	}
-	provider := models.NotificationProvider(input.Provider)
+	provider := notification.NotificationProvider(input.Provider)
 
 	if err := h.notificationService.TestNotification(ctx, provider, input.Type); err != nil {
 		return nil, huma.Error500InternalServerError((&common.NotificationTestError{Err: err}).Error())

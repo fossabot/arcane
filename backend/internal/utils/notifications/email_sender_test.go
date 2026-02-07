@@ -3,7 +3,7 @@ package notifications
 import (
 	"testing"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,43 +11,43 @@ import (
 func TestBuildSMTPURL(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  models.EmailConfig
+		config  notification.EmailConfig
 		wantURL string
 	}{
 		{
 			name: "Basic SMTP no auth, no TLS",
-			config: models.EmailConfig{
+			config: notification.EmailConfig{
 				SMTPHost:    "smtp.example.com",
 				SMTPPort:    25,
 				FromAddress: "from@example.com",
 				ToAddresses: []string{"to@example.com"},
-				TLSMode:     models.EmailTLSModeNone,
+				TLSMode:     notification.EmailTLSModeNone,
 			},
 			wantURL: "smtp://smtp.example.com:25/?encryption=None&fromAddress=from%40example.com&toAddresses=to%40example.com&useHTML=yes&useStartTLS=no",
 		},
 		{
 			name: "SMTP with auth and starttls",
-			config: models.EmailConfig{
+			config: notification.EmailConfig{
 				SMTPHost:     "smtp.example.com",
 				SMTPPort:     587,
 				SMTPUsername: "user",
 				SMTPPassword: "password",
 				FromAddress:  "from@example.com",
 				ToAddresses:  []string{"to1@example.com", "to2@example.com"},
-				TLSMode:      models.EmailTLSModeStartTLS,
+				TLSMode:      notification.EmailTLSModeStartTLS,
 			},
 			wantURL: "smtp://user:password@smtp.example.com:587/?encryption=ExplicitTLS&fromAddress=from%40example.com&toAddresses=to1%40example.com%2Cto2%40example.com&useHTML=yes&useStartTLS=yes",
 		},
 		{
 			name: "SMTP with SSL/TLS and special characters in credentials",
-			config: models.EmailConfig{
+			config: notification.EmailConfig{
 				SMTPHost:     "smtp.example.com",
 				SMTPPort:     465,
 				SMTPUsername: "user@example.com",
 				SMTPPassword: "pass/word!",
 				FromAddress:  "from@example.com",
 				ToAddresses:  []string{"to@example.com"},
-				TLSMode:      models.EmailTLSModeSSL,
+				TLSMode:      notification.EmailTLSModeSSL,
 			},
 			wantURL: "smtp://user%40example.com:pass%2Fword%21@smtp.example.com:465/?encryption=ImplicitTLS&fromAddress=from%40example.com&toAddresses=to%40example.com&useHTML=yes&useStartTLS=no",
 		},

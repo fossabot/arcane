@@ -6,14 +6,14 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 // BuildNtfyURL converts NtfyConfig to Shoutrrr URL format
 // URL example: ntfy://[user:password@]host[:port]/topic[?query]
-func BuildNtfyURL(config models.NtfyConfig) (string, error) {
+func BuildNtfyURL(config notification.NtfyConfig) (string, error) {
 	if config.Topic == "" {
 		return "", fmt.Errorf("ntfy topic is required")
 	}
@@ -81,7 +81,7 @@ func BuildNtfyURL(config models.NtfyConfig) (string, error) {
 }
 
 // SendNtfy sends a message via Shoutrrr Ntfy using proper service configuration
-func SendNtfy(ctx context.Context, config models.NtfyConfig, message string) error {
+func SendNtfy(ctx context.Context, config notification.NtfyConfig, message string) error {
 	if config.Topic == "" {
 		return fmt.Errorf("ntfy topic is required")
 	}

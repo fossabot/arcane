@@ -161,6 +161,10 @@ i18n-add locale native_name settings="frontend/project.inlang/settings.json" pic
 # --- Utils ---
 
 [group('utils')]
+sqlc:
+    cd backend && sqlc generate
+
+[group('utils')]
 _utils-list-fixes:
     #!/usr/bin/env bash
     set -euo pipefail

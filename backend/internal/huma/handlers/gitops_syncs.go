@@ -5,7 +5,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/types/base"
@@ -281,11 +280,11 @@ func (h *GitOpsSyncHandler) CreateSync(ctx context.Context, input *CreateGitOpsS
 
 	sync, err := h.syncService.CreateSync(ctx, input.EnvironmentID, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncCreationError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitOpsSync, gitops.GitOpsSync](sync)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitOpsSync, gitops.GitOpsSync](sync)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitOpsSyncMappingError{Err: mapErr}).Error())
 	}
@@ -325,11 +324,11 @@ func (h *GitOpsSyncHandler) GetSync(ctx context.Context, input *GetGitOpsSyncInp
 
 	sync, err := h.syncService.GetSyncByID(ctx, input.EnvironmentID, input.SyncID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncRetrievalError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitOpsSync, gitops.GitOpsSync](sync)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitOpsSync, gitops.GitOpsSync](sync)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitOpsSyncMappingError{Err: mapErr}).Error())
 	}
@@ -350,11 +349,11 @@ func (h *GitOpsSyncHandler) UpdateSync(ctx context.Context, input *UpdateGitOpsS
 
 	sync, err := h.syncService.UpdateSync(ctx, input.EnvironmentID, input.SyncID, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncUpdateError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitOpsSync, gitops.GitOpsSync](sync)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitOpsSync, gitops.GitOpsSync](sync)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitOpsSyncMappingError{Err: mapErr}).Error())
 	}
@@ -374,7 +373,7 @@ func (h *GitOpsSyncHandler) DeleteSync(ctx context.Context, input *DeleteGitOpsS
 	}
 
 	if err := h.syncService.DeleteSync(ctx, input.EnvironmentID, input.SyncID); err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncDeletionError{Err: err}).Error())
 	}
 
@@ -396,7 +395,7 @@ func (h *GitOpsSyncHandler) PerformSync(ctx context.Context, input *PerformSyncI
 
 	result, err := h.syncService.PerformSync(ctx, input.EnvironmentID, input.SyncID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncPerformError{Err: err}).Error())
 	}
 
@@ -416,7 +415,7 @@ func (h *GitOpsSyncHandler) GetStatus(ctx context.Context, input *GetSyncStatusI
 
 	status, err := h.syncService.GetSyncStatus(ctx, input.EnvironmentID, input.SyncID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncStatusError{Err: err}).Error())
 	}
 
@@ -436,7 +435,7 @@ func (h *GitOpsSyncHandler) BrowseFiles(ctx context.Context, input *BrowseSyncFi
 
 	response, err := h.syncService.BrowseFiles(ctx, input.EnvironmentID, input.SyncID, input.Path)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitOpsSyncBrowseError{Err: err}).Error())
 	}
 

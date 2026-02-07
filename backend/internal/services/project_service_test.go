@@ -2,25 +2,47 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	glsqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/project"
 )
 
 func setupProjectTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := gorm.Open(glsqlite.Open(":memory:"), &gorm.Config{})
+	ctx := context.Background()
+	db, err := database.Initialize(ctx, testProjectSQLiteDSN(t))
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Project{}, &models.SettingVariable{}))
-	return &database.DB{DB: db}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func setupProjectSettingsStore(t *testing.T, db *database.DB) database.SettingsStore {
+	t.Helper()
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
+	return store
+}
+
+func setupProjectStore(t *testing.T, db *database.DB) database.Store {
+	t.Helper()
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
+	return store
+}
+
+func testProjectSQLiteDSN(t *testing.T) string {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	return fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
 }
 
 func TestProjectService_GetProjectFromDatabaseByID(t *testing.T) {
@@ -28,18 +50,21 @@ func TestProjectService_GetProjectFromDatabaseByID(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup dependencies
-	settingsService, _ := NewSettingsService(ctx, db)
-	svc := NewProjectService(db, settingsService, nil, nil, nil)
+	store := setupProjectSettingsStore(t, db)
+	projectStore := setupProjectStore(t, db)
+	settingsService, _ := NewSettingsService(ctx, store)
+	svc := NewProjectService(projectStore, settingsService, nil, nil, nil)
 
 	// Create test project
-	proj := &models.Project{
-		BaseModel: models.BaseModel{
+	proj := &project.Project{
+		BaseModel: base.BaseModel{
 			ID: "p1",
 		},
 		Name: "test-project",
 		Path: "/tmp/test-project",
 	}
-	require.NoError(t, db.Create(proj).Error)
+	_, err := projectStore.CreateProject(ctx, *proj)
+	require.NoError(t, err)
 
 	// Test success
 	found, err := svc.GetProjectFromDatabaseByID(ctx, "p1")
@@ -102,12 +127,12 @@ func TestProjectService_CalculateProjectStatus(t *testing.T) {
 	tests := []struct {
 		name     string
 		services []ProjectServiceInfo
-		want     models.ProjectStatus
+		want     project.ProjectStatus
 	}{
 		{
 			name:     "empty",
 			services: []ProjectServiceInfo{},
-			want:     models.ProjectStatusUnknown,
+			want:     project.ProjectStatusUnknown,
 		},
 		{
 			name: "all running",
@@ -115,7 +140,7 @@ func TestProjectService_CalculateProjectStatus(t *testing.T) {
 				{Status: "running"},
 				{Status: "up"},
 			},
-			want: models.ProjectStatusRunning,
+			want: project.ProjectStatusRunning,
 		},
 		{
 			name: "all stopped",
@@ -123,7 +148,7 @@ func TestProjectService_CalculateProjectStatus(t *testing.T) {
 				{Status: "exited"},
 				{Status: "stopped"},
 			},
-			want: models.ProjectStatusStopped,
+			want: project.ProjectStatusStopped,
 		},
 		{
 			name: "partial",
@@ -131,7 +156,7 @@ func TestProjectService_CalculateProjectStatus(t *testing.T) {
 				{Status: "running"},
 				{Status: "exited"},
 			},
-			want: models.ProjectStatusPartiallyRunning,
+			want: project.ProjectStatusPartiallyRunning,
 		},
 	}
 
@@ -146,22 +171,25 @@ func TestProjectService_CalculateProjectStatus(t *testing.T) {
 func TestProjectService_UpdateProjectStatusInternal(t *testing.T) {
 	db := setupProjectTestDB(t)
 	ctx := context.Background()
-	svc := NewProjectService(db, nil, nil, nil, nil)
+	projectStore := setupProjectStore(t, db)
+	svc := NewProjectService(projectStore, nil, nil, nil, nil)
 
-	proj := &models.Project{
-		BaseModel: models.BaseModel{
+	proj := &project.Project{
+		BaseModel: base.BaseModel{
 			ID: "p1",
 		},
-		Status: models.ProjectStatusUnknown,
+		Status: project.ProjectStatusUnknown,
 	}
-	require.NoError(t, db.Create(proj).Error)
-
-	err := svc.updateProjectStatusInternal(ctx, "p1", models.ProjectStatusRunning)
+	_, err := projectStore.CreateProject(ctx, *proj)
 	require.NoError(t, err)
 
-	var updated models.Project
-	require.NoError(t, db.First(&updated, "id = ?", "p1").Error)
-	assert.Equal(t, models.ProjectStatusRunning, updated.Status)
+	err = svc.updateProjectStatusInternal(ctx, "p1", project.ProjectStatusRunning)
+	require.NoError(t, err)
+
+	updated, err := projectStore.GetProjectByID(ctx, "p1")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, project.ProjectStatusRunning, updated.Status)
 	if updated.UpdatedAt != nil {
 		assert.WithinDuration(t, time.Now(), *updated.UpdatedAt, time.Second)
 	} else {
@@ -174,15 +202,15 @@ func TestProjectService_IncrementStatusCounts(t *testing.T) {
 	running := 0
 	stopped := 0
 
-	svc.incrementStatusCounts(models.ProjectStatusRunning, &running, &stopped)
+	svc.incrementStatusCounts(project.ProjectStatusRunning, &running, &stopped)
 	assert.Equal(t, 1, running)
 	assert.Equal(t, 0, stopped)
 
-	svc.incrementStatusCounts(models.ProjectStatusStopped, &running, &stopped)
+	svc.incrementStatusCounts(project.ProjectStatusStopped, &running, &stopped)
 	assert.Equal(t, 1, running)
 	assert.Equal(t, 1, stopped)
 
-	svc.incrementStatusCounts(models.ProjectStatusUnknown, &running, &stopped)
+	svc.incrementStatusCounts(project.ProjectStatusUnknown, &running, &stopped)
 	assert.Equal(t, 1, running)
 	assert.Equal(t, 1, stopped)
 }

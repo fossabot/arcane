@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pagination"
 	"github.com/getarcaneapp/arcane/types/apikey"
-	"gorm.io/gorm"
+	"github.com/getarcaneapp/arcane/types/user"
 )
 
 var (
@@ -29,14 +30,14 @@ const (
 )
 
 type ApiKeyService struct {
-	db           *database.DB
+	store        database.ApiKeyStore
 	userService  *UserService
 	argon2Params *Argon2Params
 }
 
-func NewApiKeyService(db *database.DB, userService *UserService) *ApiKeyService {
+func NewApiKeyService(store database.ApiKeyStore, userService *UserService) *ApiKeyService {
 	return &ApiKeyService{
-		db:           db,
+		store:        store,
 		userService:  userService,
 		argon2Params: DefaultArgon2Params(),
 	}
@@ -71,32 +72,22 @@ func (s *ApiKeyService) CreateApiKey(ctx context.Context, userID string, req api
 
 	keyPrefix := rawKey[:len(apiKeyPrefix)+apiKeyPrefixLen]
 
-	ak := &models.ApiKey{
+	created, err := s.store.CreateApiKey(ctx, database.ApiKeyCreateInput{
+		ID:          uuid.NewString(),
 		Name:        req.Name,
 		Description: req.Description,
 		KeyHash:     keyHash,
 		KeyPrefix:   keyPrefix,
 		UserID:      userID,
 		ExpiresAt:   req.ExpiresAt,
-	}
-
-	if err := s.db.WithContext(ctx).Create(ak).Error; err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to create API key: %w", err)
 	}
 
 	return &apikey.ApiKeyCreatedDto{
-		ApiKey: apikey.ApiKey{
-			ID:          ak.ID,
-			Name:        ak.Name,
-			Description: ak.Description,
-			KeyPrefix:   ak.KeyPrefix,
-			UserID:      ak.UserID,
-			ExpiresAt:   ak.ExpiresAt,
-			LastUsedAt:  ak.LastUsedAt,
-			CreatedAt:   ak.CreatedAt,
-			UpdatedAt:   ak.UpdatedAt,
-		},
-		Key: rawKey,
+		ApiKey: s.toApiKeyDTO(created),
+		Key:    rawKey,
 	}, nil
 }
 
@@ -120,99 +111,90 @@ func (s *ApiKeyService) CreateEnvironmentApiKey(ctx context.Context, environment
 	name := fmt.Sprintf("Environment Bootstrap Key - %s", envIDShort)
 	description := "Auto-generated key for environment pairing"
 
-	ak := &models.ApiKey{
+	created, err := s.store.CreateApiKey(ctx, database.ApiKeyCreateInput{
+		ID:            uuid.NewString(),
 		Name:          name,
 		Description:   &description,
 		KeyHash:       keyHash,
 		KeyPrefix:     keyPrefix,
 		UserID:        userID,
 		EnvironmentID: &environmentID,
-	}
-
-	if err := s.db.WithContext(ctx).Create(ak).Error; err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to create environment API key: %w", err)
 	}
 
 	return &apikey.ApiKeyCreatedDto{
-		ApiKey: apikey.ApiKey{
-			ID:          ak.ID,
-			Name:        ak.Name,
-			Description: ak.Description,
-			KeyPrefix:   ak.KeyPrefix,
-			UserID:      ak.UserID,
-			ExpiresAt:   ak.ExpiresAt,
-			LastUsedAt:  ak.LastUsedAt,
-			CreatedAt:   ak.CreatedAt,
-			UpdatedAt:   ak.UpdatedAt,
-		},
-		Key: rawKey,
+		ApiKey: s.toApiKeyDTO(created),
+		Key:    rawKey,
 	}, nil
 }
 
 func (s *ApiKeyService) GetApiKey(ctx context.Context, id string) (*apikey.ApiKey, error) {
-	var ak models.ApiKey
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&ak).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrApiKeyNotFound
-		}
+	ak, err := s.store.GetApiKeyByID(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
+	if ak == nil {
+		return nil, ErrApiKeyNotFound
+	}
 
-	return &apikey.ApiKey{
-		ID:          ak.ID,
-		Name:        ak.Name,
-		Description: ak.Description,
-		KeyPrefix:   ak.KeyPrefix,
-		UserID:      ak.UserID,
-		ExpiresAt:   ak.ExpiresAt,
-		LastUsedAt:  ak.LastUsedAt,
-		CreatedAt:   ak.CreatedAt,
-		UpdatedAt:   ak.UpdatedAt,
-	}, nil
+	out := s.toApiKeyDTO(ak)
+	return &out, nil
 }
 
 func (s *ApiKeyService) ListApiKeys(ctx context.Context, params pagination.QueryParams) ([]apikey.ApiKey, pagination.Response, error) {
-	var apiKeys []models.ApiKey
-	query := s.db.WithContext(ctx).Model(&models.ApiKey{})
-
-	if term := strings.TrimSpace(params.Search); term != "" {
-		searchPattern := "%" + term + "%"
-		query = query.Where(
-			"name LIKE ? OR COALESCE(description, '') LIKE ?",
-			searchPattern, searchPattern,
-		)
-	}
-
-	paginationResp, err := pagination.PaginateAndSortDB(params, query, &apiKeys)
-	if err != nil {
-		return nil, pagination.Response{}, fmt.Errorf("failed to paginate API keys: %w", err)
-	}
-
-	result := make([]apikey.ApiKey, len(apiKeys))
-	for i, ak := range apiKeys {
-		result[i] = apikey.ApiKey{
-			ID:          ak.ID,
-			Name:        ak.Name,
-			Description: ak.Description,
-			KeyPrefix:   ak.KeyPrefix,
-			UserID:      ak.UserID,
-			ExpiresAt:   ak.ExpiresAt,
-			LastUsedAt:  ak.LastUsedAt,
-			CreatedAt:   ak.CreatedAt,
-			UpdatedAt:   ak.UpdatedAt,
+	if params.Limit != -1 {
+		if params.Limit <= 0 {
+			params.Limit = 20
+		} else if params.Limit > 100 {
+			params.Limit = 100
 		}
 	}
+	if params.Start < 0 {
+		params.Start = 0
+	}
 
-	return result, paginationResp, nil
+	apiKeys, err := s.store.ListApiKeys(ctx)
+	if err != nil {
+		return nil, pagination.Response{}, fmt.Errorf("failed to list API keys: %w", err)
+	}
+
+	config := pagination.Config[apikey.ModelApiKey]{
+		SearchAccessors: []pagination.SearchAccessor[apikey.ModelApiKey]{
+			func(k apikey.ModelApiKey) (string, error) { return k.Name, nil },
+			func(k apikey.ModelApiKey) (string, error) {
+				if k.Description == nil {
+					return "", nil
+				}
+				return *k.Description, nil
+			},
+		},
+		SortBindings: []pagination.SortBinding[apikey.ModelApiKey]{
+			{Key: "name", Fn: func(a, b apikey.ModelApiKey) int { return strings.Compare(a.Name, b.Name) }},
+			{Key: "expiresAt", Fn: func(a, b apikey.ModelApiKey) int { return compareOptionalTime(a.ExpiresAt, b.ExpiresAt) }},
+			{Key: "lastUsedAt", Fn: func(a, b apikey.ModelApiKey) int { return compareOptionalTime(a.LastUsedAt, b.LastUsedAt) }},
+		},
+	}
+
+	result := pagination.SearchOrderAndPaginate(apiKeys, params, config)
+	response := pagination.BuildResponseFromFilterResult(result, params)
+
+	out := make([]apikey.ApiKey, len(result.Items))
+	for i := range result.Items {
+		out[i] = s.toApiKeyDTO(&result.Items[i])
+	}
+
+	return out, response, nil
 }
 
 func (s *ApiKeyService) UpdateApiKey(ctx context.Context, id string, req apikey.UpdateApiKey) (*apikey.ApiKey, error) {
-	var ak models.ApiKey
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&ak).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrApiKeyNotFound
-		}
+	ak, err := s.store.GetApiKeyByID(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get API key: %w", err)
+	}
+	if ak == nil {
+		return nil, ErrApiKeyNotFound
 	}
 
 	if req.Name != nil {
@@ -225,43 +207,40 @@ func (s *ApiKeyService) UpdateApiKey(ctx context.Context, id string, req apikey.
 		ak.ExpiresAt = req.ExpiresAt
 	}
 
-	if err := s.db.WithContext(ctx).Save(&ak).Error; err != nil {
-		return nil, fmt.Errorf("failed to update API key: %w", err)
-	}
-
-	return &apikey.ApiKey{
+	updated, err := s.store.UpdateApiKey(ctx, database.ApiKeyUpdateInput{
 		ID:          ak.ID,
 		Name:        ak.Name,
 		Description: ak.Description,
-		KeyPrefix:   ak.KeyPrefix,
-		UserID:      ak.UserID,
 		ExpiresAt:   ak.ExpiresAt,
-		LastUsedAt:  ak.LastUsedAt,
-		CreatedAt:   ak.CreatedAt,
-		UpdatedAt:   ak.UpdatedAt,
-	}, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update API key: %w", err)
+	}
+
+	out := s.toApiKeyDTO(updated)
+	return &out, nil
 }
 
 func (s *ApiKeyService) DeleteApiKey(ctx context.Context, id string) error {
-	result := s.db.WithContext(ctx).Delete(&models.ApiKey{}, "id = ?", id)
-	if result.Error != nil {
-		return fmt.Errorf("failed to delete API key: %w", result.Error)
+	deleted, err := s.store.DeleteApiKeyByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete API key: %w", err)
 	}
-	if result.RowsAffected == 0 {
+	if !deleted {
 		return ErrApiKeyNotFound
 	}
 	return nil
 }
 
-func (s *ApiKeyService) ValidateApiKey(ctx context.Context, rawKey string) (*models.User, error) {
+func (s *ApiKeyService) ValidateApiKey(ctx context.Context, rawKey string) (*user.ModelUser, error) {
 	if !strings.HasPrefix(rawKey, apiKeyPrefix) {
 		return nil, ErrApiKeyInvalid
 	}
 
 	keyPrefix := rawKey[:len(apiKeyPrefix)+apiKeyPrefixLen]
 
-	var apiKeys []models.ApiKey
-	if err := s.db.WithContext(ctx).Where("key_prefix = ?", keyPrefix).Find(&apiKeys).Error; err != nil {
+	apiKeys, err := s.store.ListApiKeysByPrefix(ctx, keyPrefix)
+	if err != nil {
 		return nil, fmt.Errorf("failed to find API keys: %w", err)
 	}
 
@@ -271,11 +250,11 @@ func (s *ApiKeyService) ValidateApiKey(ctx context.Context, rawKey string) (*mod
 				return nil, ErrApiKeyExpired
 			}
 
-			// Update last_used_at asynchronously to avoid blocking auth flow
+			// Update last_used_at asynchronously to avoid blocking auth flow.
 			go func(keyID string) {
 				bgCtx := context.WithoutCancel(ctx)
 				now := time.Now()
-				s.db.WithContext(bgCtx).Model(&models.ApiKey{}).Where("id = ?", keyID).Update("last_used_at", now)
+				_ = s.store.TouchApiKeyLastUsed(bgCtx, keyID, now)
 			}(apiKey.ID)
 
 			user, err := s.userService.GetUserByID(ctx, apiKey.UserID)
@@ -297,8 +276,8 @@ func (s *ApiKeyService) GetEnvironmentByApiKey(ctx context.Context, rawKey strin
 
 	keyPrefix := rawKey[:len(apiKeyPrefix)+apiKeyPrefixLen]
 
-	var apiKeys []models.ApiKey
-	if err := s.db.WithContext(ctx).Where("key_prefix = ?", keyPrefix).Find(&apiKeys).Error; err != nil {
+	apiKeys, err := s.store.ListApiKeysByPrefix(ctx, keyPrefix)
+	if err != nil {
 		return nil, fmt.Errorf("failed to find API keys: %w", err)
 	}
 
@@ -313,4 +292,35 @@ func (s *ApiKeyService) GetEnvironmentByApiKey(ctx context.Context, rawKey strin
 	}
 
 	return nil, ErrApiKeyInvalid
+}
+
+func (s *ApiKeyService) toApiKeyDTO(ak *apikey.ModelApiKey) apikey.ApiKey {
+	return apikey.ApiKey{
+		ID:          ak.ID,
+		Name:        ak.Name,
+		Description: ak.Description,
+		KeyPrefix:   ak.KeyPrefix,
+		UserID:      ak.UserID,
+		ExpiresAt:   ak.ExpiresAt,
+		LastUsedAt:  ak.LastUsedAt,
+		CreatedAt:   ak.CreatedAt,
+		UpdatedAt:   ak.UpdatedAt,
+	}
+}
+
+func compareOptionalTime(a, b *time.Time) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return -1
+	case b == nil:
+		return 1
+	case a.Before(*b):
+		return -1
+	case a.After(*b):
+		return 1
+	default:
+		return 0
+	}
 }

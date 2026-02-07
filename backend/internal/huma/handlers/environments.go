@@ -13,7 +13,6 @@ import (
 	"github.com/getarcaneapp/arcane/backend/internal/common"
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	humamw "github.com/getarcaneapp/arcane/backend/internal/huma/middleware"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/edge"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
@@ -21,6 +20,7 @@ import (
 	"github.com/getarcaneapp/arcane/backend/internal/utils/stringutils"
 	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/environment"
+	"github.com/getarcaneapp/arcane/types/user"
 	"github.com/getarcaneapp/arcane/types/version"
 )
 
@@ -386,7 +386,7 @@ func (h *EnvironmentHandler) CreateEnvironment(ctx context.Context, input *Creat
 		return nil, huma.Error401Unauthorized((&common.NotAuthenticatedError{}).Error())
 	}
 
-	env := &models.Environment{
+	env := &environment.ModelEnvironment{
 		ApiUrl:  input.Body.ApiUrl,
 		Enabled: true,
 	}
@@ -410,9 +410,9 @@ func (h *EnvironmentHandler) CreateEnvironment(ctx context.Context, input *Creat
 	return h.createEnvironmentLegacy(ctx, env, user, input.Body)
 }
 
-func (h *EnvironmentHandler) createEnvironmentWithApiKey(ctx context.Context, env *models.Environment, user *models.User) (*CreateEnvironmentOutput, error) {
+func (h *EnvironmentHandler) createEnvironmentWithApiKey(ctx context.Context, env *environment.ModelEnvironment, user *user.ModelUser) (*CreateEnvironmentOutput, error) {
 	// New API key-based pairing flow
-	env.Status = string(models.EnvironmentStatusPending)
+	env.Status = string(environment.EnvironmentStatusPending)
 
 	created, err := h.environmentService.CreateEnvironment(ctx, env, &user.ID, &user.Username)
 	if err != nil {
@@ -440,7 +440,7 @@ func (h *EnvironmentHandler) createEnvironmentWithApiKey(ctx context.Context, en
 		return nil, huma.Error500InternalServerError("Failed to link API key")
 	}
 
-	out, mapErr := mapper.MapOne[*models.Environment, environment.Environment](created)
+	out, mapErr := mapper.MapOne[*environment.ModelEnvironment, environment.Environment](created)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.EnvironmentMappingError{Err: mapErr}).Error())
 	}
@@ -456,7 +456,7 @@ func (h *EnvironmentHandler) createEnvironmentWithApiKey(ctx context.Context, en
 	}, nil
 }
 
-func (h *EnvironmentHandler) createEnvironmentLegacy(ctx context.Context, env *models.Environment, user *models.User, body environment.Create) (*CreateEnvironmentOutput, error) {
+func (h *EnvironmentHandler) createEnvironmentLegacy(ctx context.Context, env *environment.ModelEnvironment, user *user.ModelUser, body environment.Create) (*CreateEnvironmentOutput, error) {
 	// Legacy pairing flows
 	if (body.AccessToken == nil || *body.AccessToken == "") && body.BootstrapToken != nil && *body.BootstrapToken != "" {
 		token, err := h.environmentService.PairAgentWithBootstrap(ctx, body.ApiUrl, *body.BootstrapToken)
@@ -492,7 +492,7 @@ func (h *EnvironmentHandler) createEnvironmentLegacy(ctx context.Context, env *m
 		}(created.ID, created.Name)
 	}
 
-	out, mapErr := mapper.MapOne[*models.Environment, environment.Environment](created)
+	out, mapErr := mapper.MapOne[*environment.ModelEnvironment, environment.Environment](created)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.EnvironmentMappingError{Err: mapErr}).Error())
 	}
@@ -518,7 +518,7 @@ func (h *EnvironmentHandler) GetEnvironment(ctx context.Context, input *GetEnvir
 		return nil, huma.Error404NotFound((&common.EnvironmentNotFoundError{}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.Environment, environment.Environment](env)
+	out, mapErr := mapper.MapOne[*environment.ModelEnvironment, environment.Environment](env)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.EnvironmentMappingError{Err: mapErr}).Error())
 	}
@@ -562,7 +562,7 @@ func (h *EnvironmentHandler) UpdateEnvironment(ctx context.Context, input *Updat
 
 	h.triggerPostUpdateTasks(input.ID, updated, pairingSucceeded, &input.Body) //nolint:contextcheck // intentionally detached background tasks
 
-	out, mapErr := mapper.MapOne[*models.Environment, environment.Environment](updated)
+	out, mapErr := mapper.MapOne[*environment.ModelEnvironment, environment.Environment](updated)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.EnvironmentMappingError{Err: mapErr}).Error())
 	}
@@ -603,7 +603,7 @@ func (h *EnvironmentHandler) UpdateEnvironment(ctx context.Context, input *Updat
 		}
 
 		// Re-map with updated environment data
-		out, mapErr = mapper.MapOne[*models.Environment, environment.Environment](updated)
+		out, mapErr = mapper.MapOne[*environment.ModelEnvironment, environment.Environment](updated)
 		if mapErr != nil {
 			return nil, huma.Error500InternalServerError((&common.EnvironmentMappingError{Err: mapErr}).Error())
 		}
@@ -827,7 +827,7 @@ func (h *EnvironmentHandler) handleEnvironmentPairing(ctx context.Context, envir
 	return pairingSucceeded, nil
 }
 
-func (h *EnvironmentHandler) triggerPostUpdateTasks(environmentID string, updated *models.Environment, pairingSucceeded bool, req *environment.Update) { //nolint:contextcheck // intentionally spawns background tasks
+func (h *EnvironmentHandler) triggerPostUpdateTasks(environmentID string, updated *environment.ModelEnvironment, pairingSucceeded bool, req *environment.Update) { //nolint:contextcheck // intentionally spawns background tasks
 	if updated.Enabled {
 		go func(envID string, envName string) {
 			ctx := context.Background()
@@ -883,12 +883,12 @@ func (h *EnvironmentHandler) PairEnvironment(ctx context.Context, input *PairEnv
 		return nil, huma.Error404NotFound("Environment not found")
 	}
 
-	if env.Status != string(models.EnvironmentStatusPending) {
+	if env.Status != string(environment.EnvironmentStatusPending) {
 		return nil, huma.Error400BadRequest("Environment is not in pending status")
 	}
 
 	updates := map[string]interface{}{
-		"status": string(models.EnvironmentStatusOnline),
+		"status": string(environment.EnvironmentStatusOnline),
 	}
 	_, err = h.environmentService.UpdateEnvironment(ctx, *envID, updates, nil, nil)
 	if err != nil {

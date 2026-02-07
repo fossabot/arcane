@@ -6,14 +6,14 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 // BuildSMTPURL converts EmailConfig to Shoutrrr URL format
 // URL example: smtp://user:pass@host:port/?fromAddress=...&toAddresses=...&useHTML=yes
-func BuildSMTPURL(config models.EmailConfig) (string, error) {
+func BuildSMTPURL(config notification.EmailConfig) (string, error) {
 	u := &url.URL{
 		Scheme: "smtp",
 		Host:   fmt.Sprintf("%s:%d", config.SMTPHost, config.SMTPPort),
@@ -34,13 +34,13 @@ func BuildSMTPURL(config models.EmailConfig) (string, error) {
 	// starttls -> encryption=ExplicitTLS, useStartTLS=yes
 	// ssl -> encryption=ImplicitTLS, useStartTLS=no
 	switch config.TLSMode {
-	case models.EmailTLSModeNone:
+	case notification.EmailTLSModeNone:
 		q.Set("encryption", "None")
 		q.Set("useStartTLS", "no")
-	case models.EmailTLSModeStartTLS:
+	case notification.EmailTLSModeStartTLS:
 		q.Set("encryption", "ExplicitTLS")
 		q.Set("useStartTLS", "yes")
-	case models.EmailTLSModeSSL:
+	case notification.EmailTLSModeSSL:
 		q.Set("encryption", "ImplicitTLS")
 		q.Set("useStartTLS", "no")
 	default:
@@ -53,7 +53,7 @@ func BuildSMTPURL(config models.EmailConfig) (string, error) {
 }
 
 // SendEmail sends pre-rendered HTML via Shoutrrr
-func SendEmail(ctx context.Context, config models.EmailConfig, subject, htmlBody string) error {
+func SendEmail(ctx context.Context, config notification.EmailConfig, subject, htmlBody string) error {
 	shoutrrrURL, err := BuildSMTPURL(config)
 	if err != nil {
 		return fmt.Errorf("failed to build shoutrrr URL: %w", err)

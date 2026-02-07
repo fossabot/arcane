@@ -21,9 +21,9 @@ Arcane is a modern Docker management UI with a **Go backend** (Huma v2 API), **S
 ```
 internal/
 ├── bootstrap/        # App initialization & DI wiring — START HERE for understanding how services connect
+├── database/         # DB connection, Goose migration bootstrap, sqlc stores/models/queries
 ├── huma/handlers/    # HTTP handlers (Huma v2) — thin wrappers that call services
 ├── services/         # Business logic — *_service.go files contain all domain logic
-├── models/           # GORM database models (include BaseModel for UUID, timestamps)
 ├── config/           # Environment configuration
 └── middleware/       # Auth, logging, rate limiting
 ```
@@ -48,6 +48,10 @@ lib/types/            # TypeScript types
 ### Shared Types (`types/`)
 
 Domain types shared between backend and CLI. Each domain has its own package (e.g., `types/container/`, `types/image/`).
+
+### Data Layer Migration Notes
+
+For migration details and operational cautions, see [docs/sqlc-goose-migration.md](docs/sqlc-goose-migration.md).
 
 ## Critical Patterns
 
@@ -104,6 +108,9 @@ Register handlers in [backend/internal/huma/handlers/](backend/internal/huma/han
 ## Testing
 
 ```bash
+# Regenerate sqlc (if you changed DB schema/queries)
+just sqlc
+
 # Backend unit tests
 cd backend && go test ./...
 
@@ -176,23 +183,20 @@ async getContainers() {
 }
 ```
 
-### Anti-Pattern 4: Missing BaseModel
-**Bad**: Model without standard fields
+### Anti-Pattern 4: Introducing new GORM models/tags
+**Bad**: Adding new ORM models or GORM tags
 ```go
 type Stack struct {
-    ID   string `json:"id"`
-    Name string `json:"name"`
+    ID   string `json:"id" gorm:"primaryKey"`
+    Name string `json:"name" gorm:"column:name"`
 }
 ```
 
-**Good**: Model with BaseModel
+**Good**: Add schema + sqlc query + store method
 ```go
-type Stack struct {
-    models.BaseModel
-    Name string `json:"name" gorm:"column:name"`
-}
-
-func (Stack) TableName() string { return "stacks" }
+// 1) Add Goose migration in both sqlite/postgres dirs
+// 2) Add sqlc query in internal/database/queries/{sqlite,postgres}/
+// 3) Run just sqlc and use generated types in stores/services
 ```
 
 ### Anti-Pattern 5: Using TypeScript `any`
@@ -278,41 +282,33 @@ newScheduler.RegisterJob(myJob)
 
 **Note:** Cron uses 6 fields (with seconds): `"0 0 * * * *"` = every hour at :00:00
 
-## Database Patterns (GORM)
+## Database Patterns (sqlc + Goose)
 
-### BaseModel
+### Migrations
 
-All models embed `BaseModel` for UUID primary key and timestamps:
+- Use Goose migration files in:
+  - `backend/resources/migrations/goose_sqlite/`
+  - `backend/resources/migrations/goose_postgres/`
+- Each file must include both `-- +goose Up` and `-- +goose Down`.
+- Keep migration numbers aligned across SQLite and PostgreSQL.
 
-```go
-type MyModel struct {
-    models.BaseModel           // ID, CreatedAt, UpdatedAt
-    Name        string         `json:"name" gorm:"column:name" sortable:"true"`
-    ForeignID   string         `json:"foreignId" gorm:"column:foreign_id"`
-    Related     *OtherModel    `json:"related,omitempty" gorm:"foreignKey:ForeignID"`
-}
+### Queries and Generated Models
 
-func (MyModel) TableName() string { return "my_models" }
-```
+- Write SQL in:
+  - `backend/internal/database/queries/sqlite/`
+  - `backend/internal/database/queries/postgres/`
+- Generate code with `just sqlc`.
+- Generated code in `backend/internal/database/models/{sqlitedb,pgdb}/` is committed to git.
 
-### Relationships & Preloading
+### Store Layer
 
-Always use `Preload` for eager loading relationships:
+- Services should depend on store interfaces/implementations in `backend/internal/database/stores/`.
+- Avoid direct SQL in handlers/services unless there is a clear reason.
 
-```go
-// Single preload
-s.db.WithContext(ctx).Preload("Registry").Where("id = ?", id).First(&template)
+### Shared Types
 
-// Multiple preloads
-s.db.WithContext(ctx).
-    Preload("Repository").
-    Preload("Project").
-    Where("id = ?", id).First(&sync)
-```
-
-### Custom Types
-
-Use `models.JSON` for arbitrary JSON fields and `models.StringSlice` for string arrays — both implement `driver.Valuer` and `sql.Scanner`.
+- Use `types/<domain>` package imports directly (no stub model package).
+- JSON and string-slice DB custom types are in `types/base`.
 
 ## Edge Agent Mode
 
@@ -346,8 +342,9 @@ If you're an AI coding agent (like Claude Code, GitHub Copilot, Cursor, or simil
 ### Required Reading
 
 1. **Must read**: [AI_POLICY.md](AI_POLICY.md) — Disclosure requirements and quality standards
-2. **Must follow**: All coding patterns in this document
-3. **Must ensure**: Human has tested the changes locally
+2. **Must read for DB changes**: [docs/sqlc-goose-migration.md](docs/sqlc-goose-migration.md)
+3. **Must follow**: All coding patterns in this document
+4. **Must ensure**: Human has tested the changes locally
 
 ### Common AI Pitfalls to Avoid
 
@@ -359,7 +356,7 @@ When working with Arcane:
 
 ❌ **Don't ignore multi-environment patterns**: All API endpoints must include environment ID. Check `environmentStore` usage in frontend services.
 
-❌ **Don't skip BaseModel**: All database models must embed `models.BaseModel` for UUID and timestamps.
+❌ **Don't add GORM back**: Database changes must use Goose migrations, sqlc queries, and store methods.
 
 ❌ **Don't ignore existing patterns**: Before writing new code, search for similar functionality:
 ```bash
@@ -387,13 +384,16 @@ Before submitting any AI-assisted contribution, ensure:
 # 2. Backend tests (if you changed Go code)
 just test backend
 
-# 3. Frontend type checking (if you changed frontend code)
+# 3. sqlc generation (if you changed DB schema/queries)
+just sqlc
+
+# 4. Frontend type checking (if you changed frontend code)
 just lint frontend
 
-# 4. E2E tests
+# 5. E2E tests
 just test e2e
 
-# 5. Verify hot reload works
+# 6. Verify hot reload works
 # - Frontend: http://localhost:3000
 # - Backend: http://localhost:3552
 ```

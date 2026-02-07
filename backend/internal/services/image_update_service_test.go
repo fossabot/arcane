@@ -2,17 +2,16 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/types/imageupdate"
-	glsqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	ref "go.podman.io/image/v5/docker/reference"
-	"gorm.io/gorm"
 )
 
 // TestParseImageReference tests the parseImageReference function with various image formats
@@ -342,17 +341,41 @@ func TestStringToPtr(t *testing.T) {
 }
 
 // setupImageUpdateTestDB creates an in-memory SQLite database for testing
-func setupImageUpdateTestDB(t *testing.T) *database.DB {
+func setupImageUpdateTestStore(t *testing.T) (*database.DB, database.ImageUpdateStore) {
 	t.Helper()
-	db, err := gorm.Open(glsqlite.Open(":memory:"), &gorm.Config{})
+	ctx := context.Background()
+	db, err := database.Initialize(ctx, testImageUpdateSQLiteDSN(t))
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.ImageUpdateRecord{}))
-	return &database.DB{DB: db}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
+	return db, store
+}
+
+func testImageUpdateSQLiteDSN(t *testing.T) string {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	return fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
+}
+
+func newImageUpdateRecordForTest(id, repo, tag string, hasUpdate bool, notificationSent bool) imageupdate.ImageUpdateRecord {
+	return imageupdate.ImageUpdateRecord{
+		ID:               id,
+		Repository:       repo,
+		Tag:              tag,
+		HasUpdate:        hasUpdate,
+		UpdateType:       "digest",
+		CurrentVersion:   "1.0",
+		CheckTime:        time.Now(),
+		ResponseTimeMs:   10,
+		NotificationSent: notificationSent,
+	}
 }
 
 // TestNotificationSentLogic tests the notification_sent flag behavior
 func TestImageUpdateService_NotificationSentLogic(t *testing.T) {
-	db := setupImageUpdateTestDB(t)
+	_, store := setupImageUpdateTestStore(t)
+	ctx := context.Background()
 
 	imageID := "sha256:test123"
 	repo := "docker.io/library/nginx"
@@ -375,20 +398,20 @@ func TestImageUpdateService_NotificationSentLogic(t *testing.T) {
 		// New record should have NotificationSent = false
 		assert.False(t, updateRecord.NotificationSent)
 
-		err := db.Create(updateRecord).Error
+		_, err := store.SaveImageUpdateRecord(ctx, *updateRecord)
 		require.NoError(t, err)
 
-		// Verify it was saved correctly
-		var saved models.ImageUpdateRecord
-		err = db.First(&saved, "id = ?", imageID).Error
+		saved, err := store.GetImageUpdateByID(ctx, imageID)
 		require.NoError(t, err)
+		require.NotNil(t, saved)
 		assert.False(t, saved.NotificationSent)
 	})
 }
 
 // TestNotificationSentReset tests that notification_sent resets when update state changes
 func TestImageUpdateService_NotificationSentReset(t *testing.T) {
-	db := setupImageUpdateTestDB(t)
+	_, store := setupImageUpdateTestStore(t)
+	ctx := context.Background()
 
 	imageID := "sha256:test456"
 	repo := "docker.io/library/redis"
@@ -396,14 +419,14 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		existingRecord   *models.ImageUpdateRecord
+		existingRecord   *imageupdate.ImageUpdateRecord
 		newResult        *imageupdate.Response
 		expectNotifReset bool
 		reason           string
 	}{
 		{
 			name: "digest changed - should reset",
-			existingRecord: &models.ImageUpdateRecord{
+			existingRecord: &imageupdate.ImageUpdateRecord{
 				ID:               imageID,
 				Repository:       repo,
 				Tag:              tag,
@@ -426,7 +449,7 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 		},
 		{
 			name: "version changed - should reset",
-			existingRecord: &models.ImageUpdateRecord{
+			existingRecord: &imageupdate.ImageUpdateRecord{
 				ID:               imageID,
 				Repository:       repo,
 				Tag:              tag,
@@ -449,7 +472,7 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 		},
 		{
 			name: "update state changed - should reset",
-			existingRecord: &models.ImageUpdateRecord{
+			existingRecord: &imageupdate.ImageUpdateRecord{
 				ID:               imageID,
 				Repository:       repo,
 				Tag:              tag,
@@ -470,7 +493,7 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 		},
 		{
 			name: "nothing changed - should keep flag",
-			existingRecord: &models.ImageUpdateRecord{
+			existingRecord: &imageupdate.ImageUpdateRecord{
 				ID:               imageID,
 				Repository:       repo,
 				Tag:              tag,
@@ -497,25 +520,25 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clean up any existing record
-			db.Exec("DELETE FROM image_updates WHERE id = ?", imageID)
-
-			// Insert existing record
-			err := db.Create(tt.existingRecord).Error
+			_, err := store.DeleteImageUpdatesByIDs(ctx, []string{imageID})
 			require.NoError(t, err)
 
-			// Verify it was marked as notified
-			var check models.ImageUpdateRecord
-			err = db.First(&check, "id = ?", imageID).Error
+			tt.existingRecord.CheckTime = time.Now()
+			tt.existingRecord.ResponseTimeMs = 10
+			_, err = store.SaveImageUpdateRecord(ctx, *tt.existingRecord)
 			require.NoError(t, err)
+
+			check, err := store.GetImageUpdateByID(ctx, imageID)
+			require.NoError(t, err)
+			require.NotNil(t, check)
 			assert.True(t, check.NotificationSent, "existing record should be marked as notified")
 
 			// Simulate comparison logic from saveUpdateResultByID
 			updateRecord := buildImageUpdateRecord(imageID, repo, tag, tt.newResult)
 
-			var existingRecord models.ImageUpdateRecord
-			err = db.Where("id = ?", imageID).First(&existingRecord).Error
+			existingRecord, err := store.GetImageUpdateByID(ctx, imageID)
 			require.NoError(t, err)
+			require.NotNil(t, existingRecord)
 
 			// This is the logic we're testing - comparing string values not pointers
 			stateChanged := existingRecord.HasUpdate != updateRecord.HasUpdate
@@ -529,13 +552,12 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 			}
 
 			// Save the updated record
-			err = db.Save(updateRecord).Error
+			_, err = store.SaveImageUpdateRecord(ctx, *updateRecord)
 			require.NoError(t, err)
 
-			// Verify the result
-			var updated models.ImageUpdateRecord
-			err = db.First(&updated, "id = ?", imageID).Error
+			updated, err := store.GetImageUpdateByID(ctx, imageID)
 			require.NoError(t, err)
+			require.NotNil(t, updated)
 
 			if tt.expectNotifReset {
 				assert.False(t, updated.NotificationSent, "notification_sent should be reset because: %s", tt.reason)
@@ -549,43 +571,19 @@ func TestImageUpdateService_NotificationSentReset(t *testing.T) {
 // TestGetUnnotifiedUpdates tests retrieving updates that haven't been notified
 func TestImageUpdateService_GetUnnotifiedUpdates(t *testing.T) {
 	ctx := context.Background()
-	db := setupImageUpdateTestDB(t)
-	svc := &ImageUpdateService{db: db}
+	_, store := setupImageUpdateTestStore(t)
+	svc := &ImageUpdateService{store: store}
 
 	// Create test records
-	records := []models.ImageUpdateRecord{
-		{
-			ID:               "sha256:img1",
-			Repository:       "nginx",
-			Tag:              "latest",
-			HasUpdate:        true,
-			NotificationSent: false,
-		},
-		{
-			ID:               "sha256:img2",
-			Repository:       "redis",
-			Tag:              "alpine",
-			HasUpdate:        true,
-			NotificationSent: true, // Already notified
-		},
-		{
-			ID:               "sha256:img3",
-			Repository:       "postgres",
-			Tag:              "14",
-			HasUpdate:        false, // No update
-			NotificationSent: false,
-		},
-		{
-			ID:               "sha256:img4",
-			Repository:       "traefik",
-			Tag:              "latest",
-			HasUpdate:        true,
-			NotificationSent: false,
-		},
+	records := []imageupdate.ImageUpdateRecord{
+		newImageUpdateRecordForTest("sha256:img1", "nginx", "latest", true, false),
+		newImageUpdateRecordForTest("sha256:img2", "redis", "alpine", true, true),
+		newImageUpdateRecordForTest("sha256:img3", "postgres", "14", false, false),
+		newImageUpdateRecordForTest("sha256:img4", "traefik", "latest", true, false),
 	}
 
-	for _, rec := range records {
-		err := db.Create(&rec).Error
+	for i := range records {
+		_, err := store.SaveImageUpdateRecord(ctx, records[i])
 		require.NoError(t, err)
 	}
 
@@ -604,20 +602,14 @@ func TestImageUpdateService_GetUnnotifiedUpdates(t *testing.T) {
 // TestMarkUpdatesAsNotified tests marking images as notified
 func TestImageUpdateService_MarkUpdatesAsNotified(t *testing.T) {
 	ctx := context.Background()
-	db := setupImageUpdateTestDB(t)
-	svc := &ImageUpdateService{db: db}
+	_, store := setupImageUpdateTestStore(t)
+	svc := &ImageUpdateService{store: store}
 
 	// Create test records
 	imageIDs := []string{"sha256:img1", "sha256:img2", "sha256:img3"}
 	for _, id := range imageIDs {
-		rec := models.ImageUpdateRecord{
-			ID:               id,
-			Repository:       "test/repo",
-			Tag:              "latest",
-			HasUpdate:        true,
-			NotificationSent: false,
-		}
-		err := db.Create(&rec).Error
+		rec := newImageUpdateRecordForTest(id, "test/repo", "latest", true, false)
+		_, err := store.SaveImageUpdateRecord(ctx, rec)
 		require.NoError(t, err)
 	}
 
@@ -626,28 +618,27 @@ func TestImageUpdateService_MarkUpdatesAsNotified(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify img1 and img2 are marked
-	var img1 models.ImageUpdateRecord
-	err = db.First(&img1, "id = ?", "sha256:img1").Error
+	img1, err := store.GetImageUpdateByID(ctx, "sha256:img1")
 	require.NoError(t, err)
+	require.NotNil(t, img1)
 	assert.True(t, img1.NotificationSent)
 
-	var img2 models.ImageUpdateRecord
-	err = db.First(&img2, "id = ?", "sha256:img2").Error
+	img2, err := store.GetImageUpdateByID(ctx, "sha256:img2")
 	require.NoError(t, err)
+	require.NotNil(t, img2)
 	assert.True(t, img2.NotificationSent)
 
-	// Verify img3 is still false
-	var img3 models.ImageUpdateRecord
-	err = db.First(&img3, "id = ?", "sha256:img3").Error
+	img3, err := store.GetImageUpdateByID(ctx, "sha256:img3")
 	require.NoError(t, err)
+	require.NotNil(t, img3)
 	assert.False(t, img3.NotificationSent)
 }
 
 // TestMarkUpdatesAsNotified_EmptyList tests handling of empty ID list
 func TestImageUpdateService_MarkUpdatesAsNotified_EmptyList(t *testing.T) {
 	ctx := context.Background()
-	db := setupImageUpdateTestDB(t)
-	svc := &ImageUpdateService{db: db}
+	_, store := setupImageUpdateTestStore(t)
+	svc := &ImageUpdateService{store: store}
 
 	// Should not error on empty list
 	err := svc.MarkUpdatesAsNotified(ctx, []string{})

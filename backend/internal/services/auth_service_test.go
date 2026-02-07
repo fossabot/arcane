@@ -4,26 +4,48 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	glsqlite "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/types/auth"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/user"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 func setupAuthServiceTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := gorm.Open(glsqlite.Open(":memory:"), &gorm.Config{})
+	ctx := context.Background()
+	db, err := database.Initialize(ctx, testAuthSQLiteDSN(t))
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.SettingVariable{}, &models.User{}))
-	return &database.DB{DB: db}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func setupAuthSettingsStore(t *testing.T, db *database.DB) database.SettingsStore {
+	t.Helper()
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
+	return store
+}
+
+func setupAuthUserStore(t *testing.T, db *database.DB) database.UserStore {
+	t.Helper()
+	store, err := database.NewSqlcStore(db)
+	require.NoError(t, err)
+	return store
+}
+
+func testAuthSQLiteDSN(t *testing.T) string {
+	t.Helper()
+	name := strings.ReplaceAll(t.Name(), "/", "_")
+	return fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
 }
 
 func newTestAuthService(secret string) *AuthService {
@@ -71,19 +93,19 @@ func makeAccessToken(t *testing.T, secret []byte, subject string, id string, use
 
 func TestVerifyToken_ValidClaims(t *testing.T) {
 	db := setupAuthServiceTestDB(t)
-	userSvc := NewUserService(db)
+	userSvc := NewUserService(setupAuthUserStore(t, db))
 	s := newTestAuthService("")
 	s.userService = userSvc
 
 	// Create user in DB
 	email := "a@example.com"
 	displayName := "Alice"
-	user := &models.User{
-		BaseModel:   models.BaseModel{ID: "u123"},
+	user := &user.ModelUser{
+		BaseModel:   base.BaseModel{ID: "u123"},
 		Username:    "alice",
 		Email:       &email,
 		DisplayName: &displayName,
-		Roles:       models.StringSlice{"user", "admin"},
+		Roles:       base.StringSlice{"user", "admin"},
 	}
 	_, err := userSvc.CreateUser(context.Background(), user)
 	require.NoError(t, err)
@@ -114,15 +136,15 @@ func TestVerifyToken_ValidClaims(t *testing.T) {
 
 func TestVerifyToken_Expired(t *testing.T) {
 	db := setupAuthServiceTestDB(t)
-	userSvc := NewUserService(db)
+	userSvc := NewUserService(setupAuthUserStore(t, db))
 	s := newTestAuthService("")
 	s.userService = userSvc
 
 	// Create user in DB
-	user := &models.User{
-		BaseModel: models.BaseModel{ID: "u1"},
+	user := &user.ModelUser{
+		BaseModel: base.BaseModel{ID: "u1"},
 		Username:  "bob",
-		Roles:     models.StringSlice{"user"},
+		Roles:     base.StringSlice{"user"},
 	}
 	_, err := userSvc.CreateUser(context.Background(), user)
 	require.NoError(t, err)
@@ -190,7 +212,7 @@ func TestGenerateUsernameFromEmail(t *testing.T) {
 
 func TestPersistOidcTokens_SetsFields(t *testing.T) {
 	s := newTestAuthService("")
-	user := &models.User{}
+	user := &user.ModelUser{}
 	start := time.Now()
 	resp := &auth.OidcTokenResponse{
 		AccessToken:  "at-123",
@@ -279,13 +301,14 @@ func TestGetOidcConfigurationStatus(t *testing.T) {
 func TestFindOrCreateOidcUser_MergeEnabled_EmailNotVerified_NoExistingUser_CreatesNewUser(t *testing.T) {
 	ctx := context.Background()
 	db := setupAuthServiceTestDB(t)
+	store := setupAuthSettingsStore(t, db)
 
-	settingsSvc, err := NewSettingsService(ctx, db)
+	settingsSvc, err := NewSettingsService(ctx, store)
 	require.NoError(t, err)
 	require.NoError(t, settingsSvc.EnsureDefaultSettings(ctx))
 	require.NoError(t, settingsSvc.SetBoolSetting(ctx, "oidcMergeAccounts", true))
 
-	userSvc := NewUserService(db)
+	userSvc := NewUserService(setupAuthUserStore(t, db))
 	authSvc := newTestAuthService("")
 	authSvc.userService = userSvc
 	authSvc.settingsService = settingsSvc
@@ -315,20 +338,21 @@ func TestFindOrCreateOidcUser_MergeEnabled_EmailNotVerified_NoExistingUser_Creat
 func TestFindOrCreateOidcUser_MergeEnabled_EmailNotVerified_WithExistingUser_ReturnsError(t *testing.T) {
 	ctx := context.Background()
 	db := setupAuthServiceTestDB(t)
+	store := setupAuthSettingsStore(t, db)
 
-	settingsSvc, err := NewSettingsService(ctx, db)
+	settingsSvc, err := NewSettingsService(ctx, store)
 	require.NoError(t, err)
 	require.NoError(t, settingsSvc.EnsureDefaultSettings(ctx))
 	require.NoError(t, settingsSvc.SetBoolSetting(ctx, "oidcMergeAccounts", true))
 
-	userSvc := NewUserService(db)
+	userSvc := NewUserService(setupAuthUserStore(t, db))
 	// Seed an existing local user with matching email
 	email := "existing@example.com"
-	existing := &models.User{
-		BaseModel: models.BaseModel{ID: "u1"},
+	existing := &user.ModelUser{
+		BaseModel: base.BaseModel{ID: "u1"},
 		Username:  "existing",
 		Email:     &email,
-		Roles:     models.StringSlice{"user"},
+		Roles:     base.StringSlice{"user"},
 	}
 	_, err = userSvc.CreateUser(ctx, existing)
 	require.NoError(t, err)
@@ -358,20 +382,21 @@ func TestFindOrCreateOidcUser_MergeEnabled_EmailNotVerified_WithExistingUser_Ret
 func TestFindOrCreateOidcUser_MergeEnabled_EmailVerificationMissing_WithExistingUser_Merges(t *testing.T) {
 	ctx := context.Background()
 	db := setupAuthServiceTestDB(t)
+	store := setupAuthSettingsStore(t, db)
 
-	settingsSvc, err := NewSettingsService(ctx, db)
+	settingsSvc, err := NewSettingsService(ctx, store)
 	require.NoError(t, err)
 	require.NoError(t, settingsSvc.EnsureDefaultSettings(ctx))
 	require.NoError(t, settingsSvc.SetBoolSetting(ctx, "oidcMergeAccounts", true))
 
-	userSvc := NewUserService(db)
+	userSvc := NewUserService(setupAuthUserStore(t, db))
 	// Seed an existing local user with matching email
 	email := "existing@example.com"
-	existing := &models.User{
-		BaseModel: models.BaseModel{ID: "u1"},
+	existing := &user.ModelUser{
+		BaseModel: base.BaseModel{ID: "u1"},
 		Username:  "existing",
 		Email:     &email,
-		Roles:     models.StringSlice{"user"},
+		Roles:     base.StringSlice{"user"},
 	}
 	_, err = userSvc.CreateUser(ctx, existing)
 	require.NoError(t, err)

@@ -10,7 +10,6 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
 	humamw "github.com/getarcaneapp/arcane/backend/internal/huma/middleware"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pagination"
 	"github.com/getarcaneapp/arcane/types/base"
@@ -207,10 +206,10 @@ type ListBackupsInput struct {
 }
 
 type VolumeBackupPaginatedResponse struct {
-	Success    bool                    `json:"success"`
-	Data       []models.VolumeBackup   `json:"data"`
-	Pagination base.PaginationResponse `json:"pagination"`
-	Warnings   []string                `json:"warnings,omitempty"`
+	Success    bool                       `json:"success"`
+	Data       []volumetypes.VolumeBackup `json:"data"`
+	Pagination base.PaginationResponse    `json:"pagination"`
+	Warnings   []string                   `json:"warnings,omitempty"`
 }
 
 type ListBackupsOutput struct {
@@ -223,7 +222,7 @@ type CreateBackupInput struct {
 }
 
 type CreateBackupOutput struct {
-	Body base.ApiResponse[*models.VolumeBackup]
+	Body base.ApiResponse[*volumetypes.VolumeBackup]
 }
 
 type RestoreBackupInput struct {
@@ -994,7 +993,7 @@ func (h *VolumeHandler) CreateBackup(ctx context.Context, input *CreateBackupInp
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
 	return &CreateBackupOutput{
-		Body: base.ApiResponse[*models.VolumeBackup]{
+		Body: base.ApiResponse[*volumetypes.VolumeBackup]{
 			Success: true,
 			Data:    backup,
 		},

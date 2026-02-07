@@ -12,86 +12,73 @@ import (
 	"text/template"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/notifications"
 	"github.com/getarcaneapp/arcane/backend/resources"
+	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/imageupdate"
+	"github.com/getarcaneapp/arcane/types/notification"
 )
 
 const logoURLPath = "/api/app-images/logo-email"
 
 type NotificationService struct {
-	db             *database.DB
+	store          database.NotificationStore
+	appriseStore   database.AppriseStore
 	config         *config.Config
 	appriseService *AppriseService
 }
 
-func NewNotificationService(db *database.DB, cfg *config.Config) *NotificationService {
+func NewNotificationService(store database.NotificationStore, appriseStore database.AppriseStore, cfg *config.Config) *NotificationService {
 	return &NotificationService{
-		db:             db,
+		store:          store,
+		appriseStore:   appriseStore,
 		config:         cfg,
-		appriseService: NewAppriseService(db, cfg),
+		appriseService: NewAppriseService(appriseStore, cfg),
 	}
 }
 
-func (s *NotificationService) GetAllSettings(ctx context.Context) ([]models.NotificationSettings, error) {
-	var settings []models.NotificationSettings
-	if err := s.db.WithContext(ctx).Find(&settings).Error; err != nil {
+func (s *NotificationService) GetAllSettings(ctx context.Context) ([]notification.NotificationSettings, error) {
+	settings, err := s.store.ListNotificationSettings(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get notification settings: %w", err)
 	}
 	return settings, nil
 }
 
-func (s *NotificationService) GetSettingsByProvider(ctx context.Context, provider models.NotificationProvider) (*models.NotificationSettings, error) {
-	var setting models.NotificationSettings
-	if err := s.db.WithContext(ctx).Where("provider = ?", provider).First(&setting).Error; err != nil {
+func (s *NotificationService) GetSettingsByProvider(ctx context.Context, provider notification.NotificationProvider) (*notification.NotificationSettings, error) {
+	setting, err := s.store.GetNotificationSettingByProvider(ctx, provider)
+	if err != nil {
 		return nil, err
 	}
-	return &setting, nil
+	if setting == nil {
+		return nil, errors.New("notification settings not found")
+	}
+	return setting, nil
 }
 
-func (s *NotificationService) CreateOrUpdateSettings(ctx context.Context, provider models.NotificationProvider, enabled bool, config models.JSON) (*models.NotificationSettings, error) {
-	var setting models.NotificationSettings
-
+func (s *NotificationService) CreateOrUpdateSettings(ctx context.Context, provider notification.NotificationProvider, enabled bool, config base.JSON) (*notification.NotificationSettings, error) {
 	// Clear config if provider is disabled
 	if !enabled {
-		config = models.JSON{}
+		config = base.JSON{}
 	}
-
-	err := s.db.WithContext(ctx).Where("provider = ?", provider).First(&setting).Error
+	setting, err := s.store.UpsertNotificationSetting(ctx, provider, enabled, config)
 	if err != nil {
-		setting = models.NotificationSettings{
-			Provider: provider,
-			Enabled:  enabled,
-			Config:   config,
-		}
-		if err := s.db.WithContext(ctx).Create(&setting).Error; err != nil {
-			return nil, fmt.Errorf("failed to create notification settings: %w", err)
-		}
-	} else {
-		setting.Enabled = enabled
-		setting.Config = config
-		if err := s.db.WithContext(ctx).Save(&setting).Error; err != nil {
-			return nil, fmt.Errorf("failed to update notification settings: %w", err)
-		}
+		return nil, fmt.Errorf("failed to upsert notification settings: %w", err)
 	}
-
-	return &setting, nil
+	return setting, nil
 }
 
-func (s *NotificationService) DeleteSettings(ctx context.Context, provider models.NotificationProvider) error {
-	if err := s.db.WithContext(ctx).Where("provider = ?", provider).Delete(&models.NotificationSettings{}).Error; err != nil {
+func (s *NotificationService) DeleteSettings(ctx context.Context, provider notification.NotificationProvider) error {
+	if err := s.store.DeleteNotificationSetting(ctx, provider); err != nil {
 		return fmt.Errorf("failed to delete notification settings: %w", err)
 	}
 	return nil
 }
 
-func (s *NotificationService) SendImageUpdateNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, eventType models.NotificationEventType) error {
+func (s *NotificationService) SendImageUpdateNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, eventType notification.NotificationEventType) error {
 	// Send to Apprise if enabled (don't block on error)
 	if appriseErr := s.appriseService.SendImageUpdateNotification(ctx, imageRef, updateInfo); appriseErr != nil {
 		slog.WarnContext(ctx, "Failed to send Apprise notification", "error", appriseErr)
@@ -115,23 +102,23 @@ func (s *NotificationService) SendImageUpdateNotification(ctx context.Context, i
 
 		var sendErr error
 		switch setting.Provider {
-		case models.NotificationProviderDiscord:
+		case notification.NotificationProviderDiscord:
 			sendErr = s.sendDiscordNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderEmail:
+		case notification.NotificationProviderEmail:
 			sendErr = s.sendEmailNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderTelegram:
+		case notification.NotificationProviderTelegram:
 			sendErr = s.sendTelegramNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderSignal:
+		case notification.NotificationProviderSignal:
 			sendErr = s.sendSignalNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderSlack:
+		case notification.NotificationProviderSlack:
 			sendErr = s.sendSlackNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderNtfy:
+		case notification.NotificationProviderNtfy:
 			sendErr = s.sendNtfyNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderPushover:
+		case notification.NotificationProviderPushover:
 			sendErr = s.sendPushoverNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderGotify:
+		case notification.NotificationProviderGotify:
 			sendErr = s.sendGotifyNotification(ctx, imageRef, updateInfo, setting.Config)
-		case models.NotificationProviderGeneric:
+		case notification.NotificationProviderGeneric:
 			sendErr = s.sendGenericNotification(ctx, imageRef, updateInfo, setting.Config)
 		default:
 			slog.WarnContext(ctx, "Unknown notification provider", "provider", setting.Provider)
@@ -147,7 +134,7 @@ func (s *NotificationService) SendImageUpdateNotification(ctx context.Context, i
 			errors = append(errors, fmt.Sprintf("%s: %s", setting.Provider, msg))
 		}
 
-		s.logNotification(ctx, setting.Provider, imageRef, status, errMsg, models.JSON{
+		s.logNotification(ctx, setting.Provider, imageRef, status, errMsg, base.JSON{
 			"hasUpdate":     updateInfo.HasUpdate,
 			"currentDigest": updateInfo.CurrentDigest,
 			"latestDigest":  updateInfo.LatestDigest,
@@ -164,7 +151,7 @@ func (s *NotificationService) SendImageUpdateNotification(ctx context.Context, i
 }
 
 // isEventEnabled checks if a specific event type is enabled in the config
-func (s *NotificationService) isEventEnabled(config models.JSON, eventType models.NotificationEventType) bool {
+func (s *NotificationService) isEventEnabled(config base.JSON, eventType notification.NotificationEventType) bool {
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return true // Default to enabled if we can't parse
@@ -206,29 +193,29 @@ func (s *NotificationService) SendContainerUpdateNotification(ctx context.Contex
 		}
 
 		// Check if container update event is enabled for this provider
-		if !s.isEventEnabled(setting.Config, models.NotificationEventContainerUpdate) {
+		if !s.isEventEnabled(setting.Config, notification.NotificationEventContainerUpdate) {
 			continue
 		}
 
 		var sendErr error
 		switch setting.Provider {
-		case models.NotificationProviderDiscord:
+		case notification.NotificationProviderDiscord:
 			sendErr = s.sendDiscordContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderEmail:
+		case notification.NotificationProviderEmail:
 			sendErr = s.sendEmailContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderTelegram:
+		case notification.NotificationProviderTelegram:
 			sendErr = s.sendTelegramContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderSignal:
+		case notification.NotificationProviderSignal:
 			sendErr = s.sendSignalContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderSlack:
+		case notification.NotificationProviderSlack:
 			sendErr = s.sendSlackContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderNtfy:
+		case notification.NotificationProviderNtfy:
 			sendErr = s.sendNtfyContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderPushover:
+		case notification.NotificationProviderPushover:
 			sendErr = s.sendPushoverContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderGotify:
+		case notification.NotificationProviderGotify:
 			sendErr = s.sendGotifyContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
-		case models.NotificationProviderGeneric:
+		case notification.NotificationProviderGeneric:
 			sendErr = s.sendGenericContainerUpdateNotification(ctx, containerName, imageRef, oldDigest, newDigest, setting.Config)
 		default:
 			slog.WarnContext(ctx, "Unknown notification provider", "provider", setting.Provider)
@@ -244,11 +231,11 @@ func (s *NotificationService) SendContainerUpdateNotification(ctx context.Contex
 			errors = append(errors, fmt.Sprintf("%s: %s", setting.Provider, msg))
 		}
 
-		s.logNotification(ctx, setting.Provider, imageRef, status, errMsg, models.JSON{
+		s.logNotification(ctx, setting.Provider, imageRef, status, errMsg, base.JSON{
 			"containerName": containerName,
 			"oldDigest":     oldDigest,
 			"newDigest":     newDigest,
-			"eventType":     string(models.NotificationEventContainerUpdate),
+			"eventType":     string(notification.NotificationEventContainerUpdate),
 		})
 	}
 
@@ -259,8 +246,8 @@ func (s *NotificationService) SendContainerUpdateNotification(ctx context.Contex
 	return nil
 }
 
-func (s *NotificationService) sendDiscordNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var discordConfig models.DiscordConfig
+func (s *NotificationService) sendDiscordNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var discordConfig notification.DiscordConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Discord config: %w", err)
@@ -308,8 +295,8 @@ func (s *NotificationService) sendDiscordNotification(ctx context.Context, image
 	return nil
 }
 
-func (s *NotificationService) sendTelegramNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var telegramConfig models.TelegramConfig
+func (s *NotificationService) sendTelegramNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var telegramConfig notification.TelegramConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Telegram config: %w", err)
@@ -367,8 +354,8 @@ func (s *NotificationService) sendTelegramNotification(ctx context.Context, imag
 	return nil
 }
 
-func (s *NotificationService) sendEmailNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var emailConfig models.EmailConfig
+func (s *NotificationService) sendEmailNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var emailConfig notification.EmailConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal email config: %w", err)
@@ -462,8 +449,8 @@ func (s *NotificationService) renderEmailTemplate(imageRef string, updateInfo *i
 	return htmlBuf.String(), textBuf.String(), nil
 }
 
-func (s *NotificationService) sendDiscordContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var discordConfig models.DiscordConfig
+func (s *NotificationService) sendDiscordContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var discordConfig notification.DiscordConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Discord config: %w", err)
@@ -507,8 +494,8 @@ func (s *NotificationService) sendDiscordContainerUpdateNotification(ctx context
 	return nil
 }
 
-func (s *NotificationService) sendTelegramContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var telegramConfig models.TelegramConfig
+func (s *NotificationService) sendTelegramContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var telegramConfig notification.TelegramConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Telegram config: %w", err)
@@ -560,8 +547,8 @@ func (s *NotificationService) sendTelegramContainerUpdateNotification(ctx contex
 	return nil
 }
 
-func (s *NotificationService) sendEmailContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var emailConfig models.EmailConfig
+func (s *NotificationService) sendEmailContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var emailConfig notification.EmailConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal email config: %w", err)
@@ -654,7 +641,7 @@ func (s *NotificationService) renderContainerUpdateEmailTemplate(containerName, 
 	return htmlBuf.String(), textBuf.String(), nil
 }
 
-func (s *NotificationService) TestNotification(ctx context.Context, provider models.NotificationProvider, testType string) error {
+func (s *NotificationService) TestNotification(ctx context.Context, provider notification.NotificationProvider, testType string) error {
 	setting, err := s.GetSettingsByProvider(ctx, provider)
 	if err != nil {
 		return fmt.Errorf("please save your %s settings before testing", provider)
@@ -670,9 +657,9 @@ func (s *NotificationService) TestNotification(ctx context.Context, provider mod
 	}
 
 	switch provider {
-	case models.NotificationProviderDiscord:
+	case notification.NotificationProviderDiscord:
 		return s.sendDiscordNotification(ctx, "test/image:latest", testUpdate, setting.Config)
-	case models.NotificationProviderEmail:
+	case notification.NotificationProviderEmail:
 		if testType == "image-update" {
 			return s.sendEmailNotification(ctx, "nginx:latest", testUpdate, setting.Config)
 		}
@@ -707,27 +694,27 @@ func (s *NotificationService) TestNotification(ctx context.Context, provider mod
 			return s.sendBatchEmailNotification(ctx, testUpdates, setting.Config)
 		}
 		return s.sendTestEmail(ctx, setting.Config)
-	case models.NotificationProviderTelegram:
+	case notification.NotificationProviderTelegram:
 		return s.sendTelegramNotification(ctx, "nginx:latest", testUpdate, setting.Config)
-	case models.NotificationProviderSignal:
+	case notification.NotificationProviderSignal:
 		return s.sendSignalNotification(ctx, "nginx:latest", testUpdate, setting.Config)
-	case models.NotificationProviderSlack:
+	case notification.NotificationProviderSlack:
 		return s.sendSlackNotification(ctx, "nginx:latest", testUpdate, setting.Config)
-	case models.NotificationProviderNtfy:
+	case notification.NotificationProviderNtfy:
 		return s.sendNtfyNotification(ctx, "test/image:latest", testUpdate, setting.Config)
-	case models.NotificationProviderPushover:
+	case notification.NotificationProviderPushover:
 		return s.sendPushoverNotification(ctx, "test/image:latest", testUpdate, setting.Config)
-	case models.NotificationProviderGotify:
+	case notification.NotificationProviderGotify:
 		return s.sendGotifyNotification(ctx, "test/image:latest", testUpdate, setting.Config)
-	case models.NotificationProviderGeneric:
+	case notification.NotificationProviderGeneric:
 		return s.sendGenericNotification(ctx, "test/image:latest", testUpdate, setting.Config)
 	default:
 		return fmt.Errorf("unknown provider: %s", provider)
 	}
 }
 
-func (s *NotificationService) sendTestEmail(ctx context.Context, config models.JSON) error {
-	var emailConfig models.EmailConfig
+func (s *NotificationService) sendTestEmail(ctx context.Context, config base.JSON) error {
+	var emailConfig notification.EmailConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal email config: %w", err)
@@ -812,8 +799,8 @@ func (s *NotificationService) renderTestEmailTemplate() (string, string, error) 
 	return htmlBuf.String(), textBuf.String(), nil
 }
 
-func (s *NotificationService) logNotification(ctx context.Context, provider models.NotificationProvider, imageRef, status string, errMsg *string, metadata models.JSON) {
-	log := &models.NotificationLog{
+func (s *NotificationService) logNotification(ctx context.Context, provider notification.NotificationProvider, imageRef, status string, errMsg *string, metadata base.JSON) {
+	log := &notification.NotificationLog{
 		Provider: provider,
 		ImageRef: imageRef,
 		Status:   status,
@@ -822,7 +809,7 @@ func (s *NotificationService) logNotification(ctx context.Context, provider mode
 		SentAt:   time.Now(),
 	}
 
-	if err := s.db.WithContext(ctx).Create(log).Error; err != nil {
+	if err := s.store.CreateNotificationLog(ctx, *log); err != nil {
 		slog.WarnContext(ctx, "Failed to log notification", "provider", string(provider), "error", err.Error())
 	}
 }
@@ -859,29 +846,29 @@ func (s *NotificationService) SendBatchImageUpdateNotification(ctx context.Conte
 			continue
 		}
 
-		if !s.isEventEnabled(setting.Config, models.NotificationEventImageUpdate) {
+		if !s.isEventEnabled(setting.Config, notification.NotificationEventImageUpdate) {
 			continue
 		}
 
 		var sendErr error
 		switch setting.Provider {
-		case models.NotificationProviderDiscord:
+		case notification.NotificationProviderDiscord:
 			sendErr = s.sendBatchDiscordNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderEmail:
+		case notification.NotificationProviderEmail:
 			sendErr = s.sendBatchEmailNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderTelegram:
+		case notification.NotificationProviderTelegram:
 			sendErr = s.sendBatchTelegramNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderSignal:
+		case notification.NotificationProviderSignal:
 			sendErr = s.sendBatchSignalNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderSlack:
+		case notification.NotificationProviderSlack:
 			sendErr = s.sendBatchSlackNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderNtfy:
+		case notification.NotificationProviderNtfy:
 			sendErr = s.sendBatchNtfyNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderPushover:
+		case notification.NotificationProviderPushover:
 			sendErr = s.sendBatchPushoverNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderGotify:
+		case notification.NotificationProviderGotify:
 			sendErr = s.sendBatchGotifyNotification(ctx, updatesWithChanges, setting.Config)
-		case models.NotificationProviderGeneric:
+		case notification.NotificationProviderGeneric:
 			sendErr = s.sendBatchGenericNotification(ctx, updatesWithChanges, setting.Config)
 		default:
 			slog.WarnContext(ctx, "Unknown notification provider", "provider", setting.Provider)
@@ -902,9 +889,9 @@ func (s *NotificationService) SendBatchImageUpdateNotification(ctx context.Conte
 			imageRefs = append(imageRefs, ref)
 		}
 
-		s.logNotification(ctx, setting.Provider, strings.Join(imageRefs, ", "), status, errMsg, models.JSON{
+		s.logNotification(ctx, setting.Provider, strings.Join(imageRefs, ", "), status, errMsg, base.JSON{
 			"updateCount": len(updatesWithChanges),
-			"eventType":   string(models.NotificationEventImageUpdate),
+			"eventType":   string(notification.NotificationEventImageUpdate),
 			"batch":       true,
 		})
 	}
@@ -916,8 +903,8 @@ func (s *NotificationService) SendBatchImageUpdateNotification(ctx context.Conte
 	return nil
 }
 
-func (s *NotificationService) sendBatchDiscordNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var discordConfig models.DiscordConfig
+func (s *NotificationService) sendBatchDiscordNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var discordConfig notification.DiscordConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal discord config: %w", err)
@@ -959,8 +946,8 @@ func (s *NotificationService) sendBatchDiscordNotification(ctx context.Context, 
 	return nil
 }
 
-func (s *NotificationService) sendBatchTelegramNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var telegramConfig models.TelegramConfig
+func (s *NotificationService) sendBatchTelegramNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var telegramConfig notification.TelegramConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal telegram config: %w", err)
@@ -1002,8 +989,8 @@ func (s *NotificationService) sendBatchTelegramNotification(ctx context.Context,
 	return nil
 }
 
-func (s *NotificationService) sendBatchEmailNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var emailConfig models.EmailConfig
+func (s *NotificationService) sendBatchEmailNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var emailConfig notification.EmailConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal email config: %w", err)
@@ -1105,8 +1092,8 @@ func (s *NotificationService) renderBatchEmailTemplate(updates map[string]*image
 	return htmlBuf.String(), textBuf.String(), nil
 }
 
-func (s *NotificationService) sendSignalNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var signalConfig models.SignalConfig
+func (s *NotificationService) sendSignalNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var signalConfig notification.SignalConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Signal config: %w", err)
@@ -1180,8 +1167,8 @@ func (s *NotificationService) sendSignalNotification(ctx context.Context, imageR
 	return nil
 }
 
-func (s *NotificationService) sendSignalContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var signalConfig models.SignalConfig
+func (s *NotificationService) sendSignalContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var signalConfig notification.SignalConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Signal config: %w", err)
@@ -1251,8 +1238,8 @@ func (s *NotificationService) sendSignalContainerUpdateNotification(ctx context.
 	return nil
 }
 
-func (s *NotificationService) sendBatchSignalNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var signalConfig models.SignalConfig
+func (s *NotificationService) sendBatchSignalNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var signalConfig notification.SignalConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal signal config: %w", err)
@@ -1311,8 +1298,8 @@ func (s *NotificationService) sendBatchSignalNotification(ctx context.Context, u
 	return nil
 }
 
-func (s *NotificationService) sendSlackNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var slackConfig models.SlackConfig
+func (s *NotificationService) sendSlackNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var slackConfig notification.SlackConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Slack config: %w", err)
@@ -1360,8 +1347,8 @@ func (s *NotificationService) sendSlackNotification(ctx context.Context, imageRe
 	return nil
 }
 
-func (s *NotificationService) sendSlackContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var slackConfig models.SlackConfig
+func (s *NotificationService) sendSlackContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var slackConfig notification.SlackConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Slack config: %w", err)
@@ -1405,8 +1392,8 @@ func (s *NotificationService) sendSlackContainerUpdateNotification(ctx context.C
 	return nil
 }
 
-func (s *NotificationService) sendBatchSlackNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var slackConfig models.SlackConfig
+func (s *NotificationService) sendBatchSlackNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var slackConfig notification.SlackConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal slack config: %w", err)
@@ -1448,8 +1435,8 @@ func (s *NotificationService) sendBatchSlackNotification(ctx context.Context, up
 	return nil
 }
 
-func (s *NotificationService) sendNtfyNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var ntfyConfig models.NtfyConfig
+func (s *NotificationService) sendNtfyNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var ntfyConfig notification.NtfyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Ntfy config: %w", err)
@@ -1497,8 +1484,8 @@ func (s *NotificationService) sendNtfyNotification(ctx context.Context, imageRef
 	return nil
 }
 
-func (s *NotificationService) sendNtfyContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var ntfyConfig models.NtfyConfig
+func (s *NotificationService) sendNtfyContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var ntfyConfig notification.NtfyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Ntfy config: %w", err)
@@ -1542,8 +1529,8 @@ func (s *NotificationService) sendNtfyContainerUpdateNotification(ctx context.Co
 	return nil
 }
 
-func (s *NotificationService) sendBatchNtfyNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var ntfyConfig models.NtfyConfig
+func (s *NotificationService) sendBatchNtfyNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var ntfyConfig notification.NtfyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal ntfy config: %w", err)
@@ -1587,8 +1574,8 @@ func (s *NotificationService) sendBatchNtfyNotification(ctx context.Context, upd
 	return nil
 }
 
-func (s *NotificationService) sendPushoverNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var pushoverConfig models.PushoverConfig
+func (s *NotificationService) sendPushoverNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var pushoverConfig notification.PushoverConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Pushover config: %w", err)
@@ -1637,8 +1624,8 @@ func (s *NotificationService) sendPushoverNotification(ctx context.Context, imag
 	return nil
 }
 
-func (s *NotificationService) sendPushoverContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var pushoverConfig models.PushoverConfig
+func (s *NotificationService) sendPushoverContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var pushoverConfig notification.PushoverConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Pushover config: %w", err)
@@ -1683,8 +1670,8 @@ func (s *NotificationService) sendPushoverContainerUpdateNotification(ctx contex
 	return nil
 }
 
-func (s *NotificationService) sendBatchPushoverNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var pushoverConfig models.PushoverConfig
+func (s *NotificationService) sendBatchPushoverNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var pushoverConfig notification.PushoverConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal pushover config: %w", err)
@@ -1727,8 +1714,8 @@ func (s *NotificationService) sendBatchPushoverNotification(ctx context.Context,
 	return nil
 }
 
-func (s *NotificationService) sendGenericNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var genericConfig models.GenericConfig
+func (s *NotificationService) sendGenericNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var genericConfig notification.GenericConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Generic config: %w", err)
@@ -1769,8 +1756,8 @@ func (s *NotificationService) sendGenericNotification(ctx context.Context, image
 	return nil
 }
 
-func (s *NotificationService) sendGenericContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var genericConfig models.GenericConfig
+func (s *NotificationService) sendGenericContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var genericConfig notification.GenericConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Generic config: %w", err)
@@ -1807,8 +1794,8 @@ func (s *NotificationService) sendGenericContainerUpdateNotification(ctx context
 	return nil
 }
 
-func (s *NotificationService) sendBatchGenericNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var genericConfig models.GenericConfig
+func (s *NotificationService) sendBatchGenericNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var genericConfig notification.GenericConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal generic config: %w", err)
@@ -1849,8 +1836,8 @@ func (s *NotificationService) sendBatchGenericNotification(ctx context.Context, 
 	return nil
 }
 
-func (s *NotificationService) sendGotifyNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config models.JSON) error {
-	var gotifyConfig models.GotifyConfig
+func (s *NotificationService) sendGotifyNotification(ctx context.Context, imageRef string, updateInfo *imageupdate.Response, config base.JSON) error {
+	var gotifyConfig notification.GotifyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Gotify config: %w", err)
@@ -1892,8 +1879,8 @@ func (s *NotificationService) sendGotifyNotification(ctx context.Context, imageR
 	return nil
 }
 
-func (s *NotificationService) sendGotifyContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config models.JSON) error {
-	var gotifyConfig models.GotifyConfig
+func (s *NotificationService) sendGotifyContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string, config base.JSON) error {
+	var gotifyConfig notification.GotifyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Gotify config: %w", err)
@@ -1931,8 +1918,8 @@ func (s *NotificationService) sendGotifyContainerUpdateNotification(ctx context.
 	return nil
 }
 
-func (s *NotificationService) sendBatchGotifyNotification(ctx context.Context, updates map[string]*imageupdate.Response, config models.JSON) error {
-	var gotifyConfig models.GotifyConfig
+func (s *NotificationService) sendBatchGotifyNotification(ctx context.Context, updates map[string]*imageupdate.Response, config base.JSON) error {
+	var gotifyConfig notification.GotifyConfig
 	configBytes, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal gotify config: %w", err)
@@ -1978,17 +1965,16 @@ func (s *NotificationService) sendBatchGotifyNotification(ctx context.Context, u
 // MigrateDiscordWebhookUrlToFields migrates legacy Discord webhookUrl to separate webhookId and token fields.
 // This should be called during bootstrap to ensure existing Discord configurations are preserved.
 func (s *NotificationService) MigrateDiscordWebhookUrlToFields(ctx context.Context) error {
-	var setting models.NotificationSettings
-	err := s.db.WithContext(ctx).Where("provider = ?", models.NotificationProviderDiscord).First(&setting).Error
+	setting, err := s.store.GetNotificationSettingByProvider(ctx, notification.NotificationProviderDiscord)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// No Discord config exists, nothing to migrate
-			return nil
-		}
 		return fmt.Errorf("failed to query Discord settings: %w", err)
 	}
+	if setting == nil {
+		// No Discord config exists, nothing to migrate.
+		return nil
+	}
 
-	var discordConfig models.DiscordConfig
+	var discordConfig notification.DiscordConfig
 	configBytes, err := json.Marshal(setting.Config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Discord config: %w", err)
@@ -2006,10 +1992,10 @@ func (s *NotificationService) MigrateDiscordWebhookUrlToFields(ctx context.Conte
 
 	// Check for legacy webhookUrl field
 	var legacyConfig struct {
-		WebhookUrl string                                `json:"webhookUrl"`
-		Username   string                                `json:"username,omitempty"`
-		AvatarURL  string                                `json:"avatarUrl,omitempty"`
-		Events     map[models.NotificationEventType]bool `json:"events,omitempty"`
+		WebhookUrl string                                      `json:"webhookUrl"`
+		Username   string                                      `json:"username,omitempty"`
+		AvatarURL  string                                      `json:"avatarUrl,omitempty"`
+		Events     map[notification.NotificationEventType]bool `json:"events,omitempty"`
 	}
 	if err := json.Unmarshal(configBytes, &legacyConfig); err != nil {
 		slog.WarnContext(ctx, "Failed to parse legacy Discord config structure", "error", err)
@@ -2046,7 +2032,7 @@ func (s *NotificationService) MigrateDiscordWebhookUrlToFields(ctx context.Conte
 	}
 
 	// Update with new structure
-	newConfig := models.DiscordConfig{
+	newConfig := notification.DiscordConfig{
 		WebhookID: webhookID,
 		Token:     encryptedToken,
 		Username:  legacyConfig.Username,
@@ -2054,7 +2040,7 @@ func (s *NotificationService) MigrateDiscordWebhookUrlToFields(ctx context.Conte
 		Events:    legacyConfig.Events,
 	}
 
-	var configMap models.JSON
+	var configMap base.JSON
 	newConfigBytes, err := json.Marshal(newConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal new Discord config: %w", err)
@@ -2063,8 +2049,8 @@ func (s *NotificationService) MigrateDiscordWebhookUrlToFields(ctx context.Conte
 		return fmt.Errorf("failed to unmarshal new Discord config to JSON: %w", err)
 	}
 
-	setting.Config = configMap
-	if err = s.db.WithContext(ctx).Save(&setting).Error; err != nil {
+	_, err = s.store.UpsertNotificationSetting(ctx, notification.NotificationProviderDiscord, setting.Enabled, configMap)
+	if err != nil {
 		return fmt.Errorf("failed to save migrated Discord config: %w", err)
 	}
 

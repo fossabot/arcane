@@ -8,19 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/arcaneupdater"
+	"github.com/getarcaneapp/arcane/types/user"
 )
 
 // mockSystemUpgradeService is a simple mock implementation for testing
 type mockSystemUpgradeService struct {
 	triggerCalled bool
 	triggerError  error
-	capturedUser  *models.User
+	capturedUser  *user.ModelUser
 	canUpgrade    bool
 }
 
-func (m *mockSystemUpgradeService) TriggerUpgradeViaCLI(ctx context.Context, user models.User) error {
+func (m *mockSystemUpgradeService) TriggerUpgradeViaCLI(ctx context.Context, user user.ModelUser) error {
 	m.triggerCalled = true
 	m.capturedUser = &user
 	return m.triggerError

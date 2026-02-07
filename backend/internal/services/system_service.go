@@ -11,18 +11,16 @@ import (
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/arcaneupdater"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/converter"
 	containertypes "github.com/getarcaneapp/arcane/types/container"
 	"github.com/getarcaneapp/arcane/types/system"
+	"github.com/getarcaneapp/arcane/types/user"
 	"github.com/goccy/go-yaml"
 	"golang.org/x/sync/errgroup"
 )
 
 type SystemService struct {
-	db               *database.DB
 	dockerService    *DockerClientService
 	containerService *ContainerService
 	imageService     *ImageService
@@ -32,7 +30,6 @@ type SystemService struct {
 }
 
 func NewSystemService(
-	db *database.DB,
 	dockerService *DockerClientService,
 	containerService *ContainerService,
 	imageService *ImageService,
@@ -41,7 +38,6 @@ func NewSystemService(
 	settingsService *SettingsService,
 ) *SystemService {
 	return &SystemService{
-		db:               db,
 		dockerService:    dockerService,
 		containerService: containerService,
 		imageService:     imageService,
@@ -51,7 +47,7 @@ func NewSystemService(
 	}
 }
 
-var systemUser = models.User{
+var systemUser = user.ModelUser{
 	Username: "System",
 }
 
@@ -316,8 +312,8 @@ func (s *SystemService) pruneImages(ctx context.Context, danglingOnly bool, resu
 	}
 
 	// Batch delete update records
-	if len(idsToDelete) > 0 && s.db != nil {
-		if err := s.db.WithContext(ctx).Where("id IN ?", idsToDelete).Delete(&models.ImageUpdateRecord{}).Error; err != nil {
+	if len(idsToDelete) > 0 && s.imageService != nil {
+		if err := s.imageService.DeleteImageUpdateRecordsByIDs(ctx, idsToDelete); err != nil {
 			slog.WarnContext(ctx, "Failed to delete image update records", "count", len(idsToDelete), "error", err.Error())
 		}
 	}
@@ -384,7 +380,7 @@ func (s *SystemService) pruneNetworks(ctx context.Context, result *system.PruneA
 	return nil
 }
 
-func (s *SystemService) ParseDockerRunCommand(command string) (*models.DockerRunCommand, error) {
+func (s *SystemService) ParseDockerRunCommand(command string) (*system.DockerRunCommand, error) {
 	if command == "" {
 		return nil, fmt.Errorf("docker run command must be a non-empty string")
 	}
@@ -396,7 +392,7 @@ func (s *SystemService) ParseDockerRunCommand(command string) (*models.DockerRun
 		return nil, fmt.Errorf("no arguments found after 'docker run'")
 	}
 
-	result := &models.DockerRunCommand{}
+	result := &system.DockerRunCommand{}
 	tokens, err := converter.ParseCommandTokens(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse command tokens: %w", err)
@@ -417,7 +413,7 @@ func (s *SystemService) ParseDockerRunCommand(command string) (*models.DockerRun
 	return result, nil
 }
 
-func (s *SystemService) ConvertToDockerCompose(parsed *models.DockerRunCommand) (string, string, string, error) {
+func (s *SystemService) ConvertToDockerCompose(parsed *system.DockerRunCommand) (string, string, string, error) {
 	if parsed.Image == "" {
 		return "", "", "", fmt.Errorf("cannot convert to Docker Compose: no image specified")
 	}
@@ -427,7 +423,7 @@ func (s *SystemService) ConvertToDockerCompose(parsed *models.DockerRunCommand) 
 		serviceName = "app"
 	}
 
-	service := models.DockerComposeService{
+	service := system.DockerComposeService{
 		Image: parsed.Image,
 	}
 
@@ -485,15 +481,15 @@ func (s *SystemService) ConvertToDockerCompose(parsed *models.DockerRunCommand) 
 	}
 
 	if parsed.HealthCheck != "" {
-		service.Healthcheck = &models.DockerComposeHealthcheck{
+		service.Healthcheck = &system.DockerComposeHealthcheck{
 			Test: parsed.HealthCheck,
 		}
 	}
 
 	if parsed.MemoryLimit != "" || parsed.CPULimit != "" {
-		service.Deploy = &models.DockerComposeDeploy{
-			Resources: &models.DockerComposeResources{
-				Limits: &models.DockerComposeResourceLimits{},
+		service.Deploy = &system.DockerComposeDeploy{
+			Resources: &system.DockerComposeResources{
+				Limits: &system.DockerComposeResourceLimits{},
 			},
 		}
 		if parsed.MemoryLimit != "" {
@@ -504,8 +500,8 @@ func (s *SystemService) ConvertToDockerCompose(parsed *models.DockerRunCommand) 
 		}
 	}
 
-	compose := models.DockerComposeConfig{
-		Services: map[string]models.DockerComposeService{
+	compose := system.DockerComposeConfig{
+		Services: map[string]system.DockerComposeService{
 			serviceName: service,
 		},
 	}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/types/base"
@@ -422,7 +421,7 @@ func (h *TemplateHandler) GetAllTemplates(ctx context.Context, _ *GetAllTemplate
 		return nil, huma.Error500InternalServerError((&common.TemplateListError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapSlice[models.ComposeTemplate, template.Template](templates)
+	out, mapErr := mapper.MapSlice[template.ComposeTemplate, template.Template](templates)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.TemplateMappingError{Err: mapErr}).Error())
 	}
@@ -495,7 +494,7 @@ func (h *TemplateHandler) CreateTemplate(ctx context.Context, input *CreateTempl
 		return nil, huma.Error500InternalServerError("service not available")
 	}
 
-	tmpl := &models.ComposeTemplate{
+	tmpl := &template.ComposeTemplate{
 		Name:        input.Body.Name,
 		Description: input.Body.Description,
 		Content:     input.Body.Content,
@@ -533,7 +532,7 @@ func (h *TemplateHandler) UpdateTemplate(ctx context.Context, input *UpdateTempl
 		return nil, huma.Error400BadRequest((&common.TemplateIDRequiredError{}).Error())
 	}
 
-	updates := &models.ComposeTemplate{
+	updates := &template.ComposeTemplate{
 		Name:        input.Body.Name,
 		Description: input.Body.Description,
 		Content:     input.Body.Content,
@@ -687,7 +686,7 @@ func (h *TemplateHandler) GetRegistries(ctx context.Context, _ *GetTemplateRegis
 		return nil, huma.Error500InternalServerError((&common.RegistryFetchError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapSlice[models.TemplateRegistry, template.TemplateRegistry](registries)
+	out, mapErr := mapper.MapSlice[template.ModelTemplateRegistry, template.TemplateRegistry](registries)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.RegistryFetchError{Err: mapErr}).Error())
 	}
@@ -706,7 +705,7 @@ func (h *TemplateHandler) CreateRegistry(ctx context.Context, input *CreateTempl
 		return nil, huma.Error500InternalServerError("service not available")
 	}
 
-	registry := &models.TemplateRegistry{
+	registry := &template.ModelTemplateRegistry{
 		Name:        input.Body.Name,
 		URL:         input.Body.URL,
 		Description: input.Body.Description,
@@ -739,7 +738,7 @@ func (h *TemplateHandler) UpdateRegistry(ctx context.Context, input *UpdateTempl
 		return nil, huma.Error400BadRequest((&common.RegistryIDRequiredError{}).Error())
 	}
 
-	updates := &models.TemplateRegistry{
+	updates := &template.ModelTemplateRegistry{
 		Name:        input.Body.Name,
 		URL:         input.Body.URL,
 		Description: input.Body.Description,

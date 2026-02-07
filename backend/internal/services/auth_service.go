@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
 	"github.com/getarcaneapp/arcane/types/auth"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/event"
+	"github.com/getarcaneapp/arcane/types/settings"
+	"github.com/getarcaneapp/arcane/types/user"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -34,10 +37,10 @@ type TokenPair struct {
 }
 
 type AuthSettings struct {
-	LocalAuthEnabled bool               `json:"localAuthEnabled"`
-	OidcEnabled      bool               `json:"oidcEnabled"`
-	SessionTimeout   int                `json:"sessionTimeout"`
-	Oidc             *models.OidcConfig `json:"oidc,omitempty"`
+	LocalAuthEnabled bool                 `json:"localAuthEnabled"`
+	OidcEnabled      bool                 `json:"oidcEnabled"`
+	SessionTimeout   int                  `json:"sessionTimeout"`
+	Oidc             *settings.OidcConfig `json:"oidc,omitempty"`
 }
 
 type UserClaims struct {
@@ -71,7 +74,7 @@ func NewAuthService(userService *UserService, settingsService *SettingsService, 
 }
 
 func (s *AuthService) getAuthSettings(ctx context.Context) (*AuthSettings, error) {
-	settings, err := s.settingsService.GetSettings(ctx)
+	appSettings, err := s.settingsService.GetSettings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get settings: %w", err)
 	}
@@ -79,25 +82,25 @@ func (s *AuthService) getAuthSettings(ctx context.Context) (*AuthSettings, error
 	timeoutMinutes, _ := s.GetSessionTimeout(ctx)
 
 	authSettings := &AuthSettings{
-		LocalAuthEnabled: settings.AuthLocalEnabled.IsTrue(),
-		OidcEnabled:      settings.OidcEnabled.IsTrue(),
+		LocalAuthEnabled: appSettings.AuthLocalEnabled.IsTrue(),
+		OidcEnabled:      appSettings.OidcEnabled.IsTrue(),
 		SessionTimeout:   timeoutMinutes,
 	}
 
 	if authSettings.OidcEnabled {
-		oidcConfig := &models.OidcConfig{
-			ClientID:                    settings.OidcClientId.Value,
-			ClientSecret:                settings.OidcClientSecret.Value,
-			IssuerURL:                   settings.OidcIssuerUrl.Value,
-			AuthorizationEndpoint:       settings.OidcAuthorizationEndpoint.Value,
-			TokenEndpoint:               settings.OidcTokenEndpoint.Value,
-			UserinfoEndpoint:            settings.OidcUserinfoEndpoint.Value,
-			JwksURI:                     settings.OidcJwksEndpoint.Value,
-			DeviceAuthorizationEndpoint: settings.OidcDeviceAuthorizationEndpoint.Value,
-			Scopes:                      settings.OidcScopes.Value,
-			AdminClaim:                  settings.OidcAdminClaim.Value,
-			AdminValue:                  settings.OidcAdminValue.Value,
-			SkipTlsVerify:               settings.OidcSkipTlsVerify.IsTrue(),
+		oidcConfig := &settings.OidcConfig{
+			ClientID:                    appSettings.OidcClientId.Value,
+			ClientSecret:                appSettings.OidcClientSecret.Value,
+			IssuerURL:                   appSettings.OidcIssuerUrl.Value,
+			AuthorizationEndpoint:       appSettings.OidcAuthorizationEndpoint.Value,
+			TokenEndpoint:               appSettings.OidcTokenEndpoint.Value,
+			UserinfoEndpoint:            appSettings.OidcUserinfoEndpoint.Value,
+			JwksURI:                     appSettings.OidcJwksEndpoint.Value,
+			DeviceAuthorizationEndpoint: appSettings.OidcDeviceAuthorizationEndpoint.Value,
+			Scopes:                      appSettings.OidcScopes.Value,
+			AdminClaim:                  appSettings.OidcAdminClaim.Value,
+			AdminValue:                  appSettings.OidcAdminValue.Value,
+			SkipTlsVerify:               appSettings.OidcSkipTlsVerify.IsTrue(),
 		}
 
 		if oidcConfig.ClientID != "" || oidcConfig.IssuerURL != "" {
@@ -180,7 +183,7 @@ func (s *AuthService) IsOidcEnabled(ctx context.Context) (bool, error) {
 	return settings.OidcEnabled.IsTrue(), nil
 }
 
-func (s *AuthService) GetOidcConfig(ctx context.Context) (*models.OidcConfig, error) {
+func (s *AuthService) GetOidcConfig(ctx context.Context) (*settings.OidcConfig, error) {
 	authSettings, err := s.getAuthSettings(ctx)
 	if err != nil {
 		return nil, err
@@ -193,7 +196,7 @@ func (s *AuthService) GetOidcConfig(ctx context.Context) (*models.OidcConfig, er
 	return authSettings.Oidc, nil
 }
 
-func (s *AuthService) Login(ctx context.Context, username, password string) (*models.User, *TokenPair, error) {
+func (s *AuthService) Login(ctx context.Context, username, password string) (*user.ModelUser, *TokenPair, error) {
 	localEnabled, err := s.IsLocalAuthEnabled(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -243,7 +246,7 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*mo
 		return nil, nil, err
 	}
 
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action": "login",
 		"method": "local",
 	}
@@ -252,13 +255,13 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*mo
 	logUserID := user.ID
 	logUsername := user.Username
 	s.runInBackground(ctx, "log_user_login", func(ctx context.Context) error {
-		return s.eventService.LogUserEvent(ctx, models.EventTypeUserLogin, logUserID, logUsername, metadata)
+		return s.eventService.LogUserEvent(ctx, event.EventTypeUserLogin, logUserID, logUsername, metadata)
 	})
 
 	return user, tokenPair, nil
 }
 
-func (s *AuthService) OidcLogin(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*models.User, *TokenPair, error) {
+func (s *AuthService) OidcLogin(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*user.ModelUser, *TokenPair, error) {
 	if userInfo.Subject == "" {
 		return nil, nil, errors.New("missing OIDC subject identifier")
 	}
@@ -273,7 +276,7 @@ func (s *AuthService) OidcLogin(ctx context.Context, userInfo auth.OidcUserInfo,
 		return nil, nil, err
 	}
 
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action":  "login",
 		"method":  "oidc",
 		"newUser": isNewUser,
@@ -284,13 +287,13 @@ func (s *AuthService) OidcLogin(ctx context.Context, userInfo auth.OidcUserInfo,
 	userID := user.ID
 	username := user.Username
 	s.runInBackground(ctx, "log_oidc_login", func(ctx context.Context) error {
-		return s.eventService.LogUserEvent(ctx, models.EventTypeUserLogin, userID, username, metadata)
+		return s.eventService.LogUserEvent(ctx, event.EventTypeUserLogin, userID, username, metadata)
 	})
 
 	return user, tokenPair, nil
 }
 
-func (s *AuthService) findOrCreateOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*models.User, bool, error) {
+func (s *AuthService) findOrCreateOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*user.ModelUser, bool, error) {
 	user, err := s.userService.GetUserByOidcSubjectId(ctx, userInfo.Subject)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		return nil, false, err
@@ -315,14 +318,14 @@ func (s *AuthService) findOrCreateOidcUser(ctx context.Context, userInfo auth.Oi
 	return created, true, nil
 }
 
-func (s *AuthService) updateExistingOidcUser(ctx context.Context, user *models.User, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*models.User, bool, error) {
+func (s *AuthService) updateExistingOidcUser(ctx context.Context, user *user.ModelUser, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*user.ModelUser, bool, error) {
 	if err := s.updateOidcUser(ctx, user, userInfo, tokenResp); err != nil {
 		return nil, false, err
 	}
 	return user, false, nil
 }
 
-func (s *AuthService) tryMergeOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*models.User, bool, error) {
+func (s *AuthService) tryMergeOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*user.ModelUser, bool, error) {
 	if userInfo.Email == "" || !s.isOidcMergeEnabled(ctx) {
 		return nil, false, nil
 	}
@@ -370,7 +373,7 @@ func (s *AuthService) validateMergeEmailVerification(userInfo auth.OidcUserInfo)
 	return nil
 }
 
-func (s *AuthService) createOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*models.User, error) {
+func (s *AuthService) createOidcUser(ctx context.Context, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) (*user.ModelUser, error) {
 	now := time.Now()
 
 	var username string
@@ -392,13 +395,13 @@ func (s *AuthService) createOidcUser(ctx context.Context, userInfo auth.OidcUser
 
 	email := userInfo.Email
 
-	roles := models.StringSlice{"user"}
+	roles := base.StringSlice{"user"}
 	if s.isAdminFromOidc(ctx, userInfo, tokenResp) {
 		roles = append(roles, "admin")
 	}
 
-	user := &models.User{
-		BaseModel:     models.BaseModel{ID: uuid.NewString()},
+	user := &user.ModelUser{
+		BaseModel:     base.BaseModel{ID: uuid.NewString()},
 		Username:      username,
 		DisplayName:   &displayName,
 		Email:         &email,
@@ -415,7 +418,7 @@ func (s *AuthService) createOidcUser(ctx context.Context, userInfo auth.OidcUser
 	return user, nil
 }
 
-func (s *AuthService) updateOidcUser(ctx context.Context, user *models.User, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) error {
+func (s *AuthService) updateOidcUser(ctx context.Context, user *user.ModelUser, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) error {
 	if userInfo.Name != "" && user.DisplayName == nil {
 		user.DisplayName = &userInfo.Name
 	}
@@ -440,9 +443,9 @@ func (s *AuthService) updateOidcUser(ctx context.Context, user *models.User, use
 	return err
 }
 
-func (s *AuthService) mergeOidcWithExistingUser(ctx context.Context, user *models.User, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) error {
+func (s *AuthService) mergeOidcWithExistingUser(ctx context.Context, existingUser *user.ModelUser, userInfo auth.OidcUserInfo, tokenResp *auth.OidcTokenResponse) error {
 	// Perform the merge atomically to avoid races when multiple OIDC subjects share the same email
-	_, err := s.userService.AttachOidcSubjectTransactional(ctx, user.ID, userInfo.Subject, func(u *models.User) {
+	_, err := s.userService.AttachOidcSubjectTransactional(ctx, existingUser.ID, userInfo.Subject, func(u *user.ModelUser) {
 		// Update display name if not set
 		if userInfo.Name != "" && u.DisplayName == nil {
 			u.DisplayName = &userInfo.Name
@@ -467,7 +470,7 @@ func (s *AuthService) mergeOidcWithExistingUser(ctx context.Context, user *model
 	return err
 }
 
-func hasRole(roles models.StringSlice, role string) bool {
+func hasRole(roles base.StringSlice, role string) bool {
 	for _, r := range roles {
 		if strings.EqualFold(r, role) {
 			return true
@@ -476,15 +479,15 @@ func hasRole(roles models.StringSlice, role string) bool {
 	return false
 }
 
-func addRole(roles models.StringSlice, role string) models.StringSlice {
+func addRole(roles base.StringSlice, role string) base.StringSlice {
 	if hasRole(roles, role) {
 		return roles
 	}
 	return append(roles, role)
 }
 
-func removeRole(roles models.StringSlice, role string) models.StringSlice {
-	out := make(models.StringSlice, 0, len(roles))
+func removeRole(roles base.StringSlice, role string) base.StringSlice {
+	out := make(base.StringSlice, 0, len(roles))
 	for _, r := range roles {
 		if !strings.EqualFold(r, role) {
 			out = append(out, r)
@@ -537,7 +540,7 @@ func (s *AuthService) getAdminClaimConfig(ctx context.Context) (claim string, va
 	return claim, values
 }
 
-func (s *AuthService) persistOidcTokens(user *models.User, tokenResp *auth.OidcTokenResponse) {
+func (s *AuthService) persistOidcTokens(user *user.ModelUser, tokenResp *auth.OidcTokenResponse) {
 	if tokenResp == nil {
 		return
 	}
@@ -594,7 +597,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*T
 	return tokenPair, nil
 }
 
-func (s *AuthService) VerifyToken(ctx context.Context, accessToken string) (*models.User, error) {
+func (s *AuthService) VerifyToken(ctx context.Context, accessToken string) (*user.ModelUser, error) {
 	token, err := jwt.ParseWithClaims(accessToken, &UserClaims{},
 		func(t *jwt.Token) (interface{}, error) {
 			return s.jwtSecret, nil
@@ -666,7 +669,7 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, currentPasswor
 	return err
 }
 
-func (s *AuthService) generateTokenPair(ctx context.Context, user *models.User) (*TokenPair, error) {
+func (s *AuthService) generateTokenPair(ctx context.Context, user *user.ModelUser) (*TokenPair, error) {
 	sessionTimeout, _ := s.GetSessionTimeout(ctx)
 
 	accessTokenExpiry := time.Now().Add(time.Duration(sessionTimeout) * time.Minute)

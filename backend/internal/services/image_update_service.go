@@ -10,18 +10,19 @@ import (
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
 	registry "github.com/getarcaneapp/arcane/backend/internal/utils/registry"
+	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/containerregistry"
+	"github.com/getarcaneapp/arcane/types/event"
 	"github.com/getarcaneapp/arcane/types/imageupdate"
+	"github.com/getarcaneapp/arcane/types/notification"
 	ref "go.podman.io/image/v5/docker/reference"
 	"golang.org/x/sync/errgroup"
-	"gorm.io/gorm"
 )
 
 type ImageUpdateService struct {
-	db                  *database.DB
+	store               database.ImageUpdateStore
 	settingsService     *SettingsService
 	registryService     *ContainerRegistryService
 	dockerService       *DockerClientService
@@ -35,9 +36,9 @@ type ImageParts struct {
 	Tag        string
 }
 
-func NewImageUpdateService(db *database.DB, settingsService *SettingsService, registryService *ContainerRegistryService, dockerService *DockerClientService, eventService *EventService, notificationService *NotificationService) *ImageUpdateService {
+func NewImageUpdateService(store database.ImageUpdateStore, settingsService *SettingsService, registryService *ContainerRegistryService, dockerService *DockerClientService, eventService *EventService, notificationService *NotificationService) *ImageUpdateService {
 	return &ImageUpdateService{
-		db:                  db,
+		store:               store,
 		settingsService:     settingsService,
 		registryService:     registryService,
 		dockerService:       dockerService,
@@ -67,13 +68,13 @@ func (s *ImageUpdateService) CheckImageUpdate(ctx context.Context, imageRef stri
 			CheckTime:      time.Now(),
 			ResponseTimeMs: int(time.Since(startTime).Milliseconds()),
 		}
-		metadata := models.JSON{
+		metadata := base.JSON{
 			"action":    "check_update",
 			"imageRef":  imageRef,
 			"error":     err.Error(),
 			"checkType": "digest",
 		}
-		if logErr := s.eventService.LogImageEvent(ctx, models.EventTypeImageScan, "", imageRef, systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
+		if logErr := s.eventService.LogImageEvent(ctx, event.EventTypeImageScan, "", imageRef, systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
 			slog.WarnContext(ctx, "Failed to log image update check error event", "imageRef", imageRef, "error", logErr.Error())
 		}
 		if saveErr := s.saveUpdateResult(ctx, imageRef, result); saveErr != nil {
@@ -83,7 +84,7 @@ func (s *ImageUpdateService) CheckImageUpdate(ctx context.Context, imageRef stri
 	}
 
 	digestResult.ResponseTimeMs = int(time.Since(startTime).Milliseconds())
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action":         "check_update",
 		"imageRef":       imageRef,
 		"hasUpdate":      digestResult.HasUpdate,
@@ -92,7 +93,7 @@ func (s *ImageUpdateService) CheckImageUpdate(ctx context.Context, imageRef stri
 		"latestDigest":   digestResult.LatestDigest,
 		"responseTimeMs": digestResult.ResponseTimeMs,
 	}
-	if logErr := s.eventService.LogImageEvent(ctx, models.EventTypeImageScan, "", imageRef, systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
+	if logErr := s.eventService.LogImageEvent(ctx, event.EventTypeImageScan, "", imageRef, systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
 		slog.WarnContext(ctx, "Failed to log image update check event", "imageRef", imageRef, "error", logErr.Error())
 	}
 	if saveErr := s.saveUpdateResult(ctx, imageRef, digestResult); saveErr != nil {
@@ -101,7 +102,7 @@ func (s *ImageUpdateService) CheckImageUpdate(ctx context.Context, imageRef stri
 
 	// Send notification if update is available
 	if digestResult.HasUpdate && s.notificationService != nil {
-		if notifErr := s.notificationService.SendImageUpdateNotification(ctx, imageRef, digestResult, models.NotificationEventImageUpdate); notifErr != nil {
+		if notifErr := s.notificationService.SendImageUpdateNotification(ctx, imageRef, digestResult, notification.NotificationEventImageUpdate); notifErr != nil {
 			slog.WarnContext(ctx, "Failed to send update notification", "imageRef", imageRef, "error", notifErr.Error())
 		}
 	}
@@ -117,7 +118,7 @@ type authDetails struct {
 
 // Try anonymous first, then each matching registry credential (decrypting token)
 // until one returns a token. If auth is not required, returns empty token.
-func (s *ImageUpdateService) getRegistryToken(ctx context.Context, regHost, repository string, regs []models.ContainerRegistry) (string, *authDetails, error) {
+func (s *ImageUpdateService) getRegistryToken(ctx context.Context, regHost, repository string, regs []containerregistry.ModelContainerRegistry) (string, *authDetails, error) {
 	rc := registry.NewClient()
 
 	slog.DebugContext(ctx, "Checking registry auth", "registry", regHost, "repository", repository)
@@ -168,7 +169,7 @@ func (s *ImageUpdateService) getRegistryToken(ctx context.Context, regHost, repo
 	return "", nil, fmt.Errorf("failed to get registry token")
 }
 
-func (s *ImageUpdateService) checkDigestUpdate(ctx context.Context, parts *ImageParts, registries []models.ContainerRegistry) (*imageupdate.Response, error) {
+func (s *ImageUpdateService) checkDigestUpdate(ctx context.Context, parts *ImageParts, registries []containerregistry.ModelContainerRegistry) (*imageupdate.Response, error) {
 	rc := registry.NewClient()
 
 	token, auth, err := s.getRegistryToken(ctx, parts.Registry, parts.Repository, registries)
@@ -419,7 +420,7 @@ func (s *ImageUpdateService) getLocalImageDigestWithAll(ctx context.Context, ima
 }
 
 // Returns all enabled credentials whose URL matches the image registry domain (normalized)
-func (s *ImageUpdateService) getRegistriesForImage(ctx context.Context, regHost string) []models.ContainerRegistry {
+func (s *ImageUpdateService) getRegistriesForImage(ctx context.Context, regHost string) []containerregistry.ModelContainerRegistry {
 	normalizedDomain := s.normalizeRegistryURL(regHost)
 
 	registries, err := s.registryService.GetAllRegistries(ctx)
@@ -428,7 +429,7 @@ func (s *ImageUpdateService) getRegistriesForImage(ctx context.Context, regHost 
 		return nil
 	}
 
-	var matches []models.ContainerRegistry
+	var matches []containerregistry.ModelContainerRegistry
 	for _, reg := range registries {
 		if !reg.Enabled {
 			continue
@@ -477,12 +478,12 @@ func (s *ImageUpdateService) normalizeRepository(regHost, repo string) string {
 func (s *ImageUpdateService) CheckImageUpdateByID(ctx context.Context, imageID string) (*imageupdate.Response, error) {
 	imageRef, err := s.getImageRefByID(ctx, imageID)
 	if err != nil {
-		metadata := models.JSON{
+		metadata := base.JSON{
 			"action":  "check_update_by_id",
 			"imageID": imageID,
 			"error":   err.Error(),
 		}
-		if logErr := s.eventService.LogImageEvent(ctx, models.EventTypeImageScan, imageID, "", systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
+		if logErr := s.eventService.LogImageEvent(ctx, event.EventTypeImageScan, imageID, "", systemUser.ID, systemUser.Username, "0", metadata); logErr != nil {
 			slog.WarnContext(ctx, "Failed to log image update check by ID error event", "imageID", imageID, "error", logErr.Error())
 		}
 		return nil, fmt.Errorf("failed to get image reference: %w", err)
@@ -562,13 +563,13 @@ func stringPtrToString(s *string) string {
 	return *s
 }
 
-func buildImageUpdateRecord(imageID, repo, tag string, result *imageupdate.Response) *models.ImageUpdateRecord {
+func buildImageUpdateRecord(imageID, repo, tag string, result *imageupdate.Response) *imageupdate.ImageUpdateRecord {
 	currentVersion := result.CurrentVersion
 	if currentVersion == "" {
 		currentVersion = tag
 	}
 
-	return &models.ImageUpdateRecord{
+	return &imageupdate.ImageUpdateRecord{
 		ID:             imageID,
 		Repository:     repo,
 		Tag:            tag,
@@ -589,42 +590,42 @@ func buildImageUpdateRecord(imageID, repo, tag string, result *imageupdate.Respo
 }
 
 func (s *ImageUpdateService) saveUpdateResultByID(ctx context.Context, imageID string, result *imageupdate.Response) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		dockerClient, err := s.dockerService.GetClient()
-		if err != nil {
-			return fmt.Errorf("failed to connect to Docker: %w", err)
-		}
+	dockerClient, err := s.dockerService.GetClient()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Docker: %w", err)
+	}
 
-		dockerImage, err := dockerClient.ImageInspect(ctx, imageID)
-		if err != nil {
-			return fmt.Errorf("failed to inspect image: %w", err)
-		}
+	dockerImage, err := dockerClient.ImageInspect(ctx, imageID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect image: %w", err)
+	}
 
-		repo, tag := extractRepoAndTagFromImage(dockerImage)
-		updateRecord := buildImageUpdateRecord(imageID, repo, tag, result)
+	repo, tag := extractRepoAndTagFromImage(dockerImage)
+	updateRecord := buildImageUpdateRecord(imageID, repo, tag, result)
 
-		// Check if there's an existing record to compare state changes
-		var existingRecord models.ImageUpdateRecord
-		if err := tx.Where("id = ?", imageID).First(&existingRecord).Error; err == nil {
-			// Existing record found - check if we need to reset notification_sent
-			stateChanged := existingRecord.HasUpdate != updateRecord.HasUpdate
-			digestChanged := stringPtrToString(existingRecord.LatestDigest) != stringPtrToString(updateRecord.LatestDigest)
-			versionChanged := stringPtrToString(existingRecord.LatestVersion) != stringPtrToString(updateRecord.LatestVersion)
+	existingRecord, err := s.store.GetImageUpdateByID(ctx, imageID)
+	if err != nil {
+		return fmt.Errorf("failed to load existing update record: %w", err)
+	}
+	if existingRecord != nil {
+		stateChanged := existingRecord.HasUpdate != updateRecord.HasUpdate
+		digestChanged := stringPtrToString(existingRecord.LatestDigest) != stringPtrToString(updateRecord.LatestDigest)
+		versionChanged := stringPtrToString(existingRecord.LatestVersion) != stringPtrToString(updateRecord.LatestVersion)
 
-			// Reset notification_sent if the update state changed in any way
-			if stateChanged || (updateRecord.HasUpdate && (digestChanged || versionChanged)) {
-				updateRecord.NotificationSent = false
-			} else {
-				// Keep the existing notification_sent value if nothing changed
-				updateRecord.NotificationSent = existingRecord.NotificationSent
-			}
-		} else {
-			// New record - start with notification_sent = false
+		if stateChanged || (updateRecord.HasUpdate && (digestChanged || versionChanged)) {
 			updateRecord.NotificationSent = false
+		} else {
+			updateRecord.NotificationSent = existingRecord.NotificationSent
 		}
+	} else {
+		updateRecord.NotificationSent = false
+	}
 
-		return tx.Save(updateRecord).Error
-	})
+	if _, err := s.store.SaveImageUpdateRecord(ctx, *updateRecord); err != nil {
+		return fmt.Errorf("failed to save update record: %w", err)
+	}
+
+	return nil
 }
 
 func (s *ImageUpdateService) getImageIDByRef(ctx context.Context, imageRef string) (string, error) {
@@ -641,17 +642,16 @@ func (s *ImageUpdateService) getImageIDByRef(ctx context.Context, imageRef strin
 }
 
 // GetUnnotifiedUpdates returns a map of image IDs that have updates but haven't been notified yet
-func (s *ImageUpdateService) GetUnnotifiedUpdates(ctx context.Context) (map[string]*models.ImageUpdateRecord, error) {
-	var records []models.ImageUpdateRecord
-	if err := s.db.WithContext(ctx).
-		Where("has_update = ? AND notification_sent = ?", true, false).
-		Find(&records).Error; err != nil {
+func (s *ImageUpdateService) GetUnnotifiedUpdates(ctx context.Context) (map[string]*imageupdate.ImageUpdateRecord, error) {
+	records, err := s.store.ListUnnotifiedImageUpdates(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get unnotified updates: %w", err)
 	}
 
-	result := make(map[string]*models.ImageUpdateRecord)
+	result := make(map[string]*imageupdate.ImageUpdateRecord, len(records))
 	for i := range records {
-		result[records[i].ID] = &records[i]
+		record := records[i]
+		result[record.ID] = &record
 	}
 	return result, nil
 }
@@ -662,10 +662,10 @@ func (s *ImageUpdateService) MarkUpdatesAsNotified(ctx context.Context, imageIDs
 		return nil
 	}
 
-	return s.db.WithContext(ctx).
-		Model(&models.ImageUpdateRecord{}).
-		Where("id IN ?", imageIDs).
-		Update("notification_sent", true).Error
+	if err := s.store.MarkImageUpdatesAsNotified(ctx, imageIDs); err != nil {
+		return fmt.Errorf("failed to mark updates as notified: %w", err)
+	}
+	return nil
 }
 
 type batchCred struct {
@@ -707,8 +707,8 @@ func (s *ImageUpdateService) parseAndGroupImages(imageRefs []string) (map[string
 	return regRepos, results, images
 }
 
-func (s *ImageUpdateService) buildCredentialMap(ctx context.Context, externalCreds []containerregistry.Credential) (map[string]batchCred, []models.ContainerRegistry) {
-	var enabledRegs []models.ContainerRegistry
+func (s *ImageUpdateService) buildCredentialMap(ctx context.Context, externalCreds []containerregistry.Credential) (map[string]batchCred, []containerregistry.ModelContainerRegistry) {
+	var enabledRegs []containerregistry.ModelContainerRegistry
 	credMap := make(map[string]batchCred)
 
 	normalizeHost := func(u string) string {
@@ -735,7 +735,7 @@ func (s *ImageUpdateService) buildCredentialMap(ctx context.Context, externalCre
 				slog.WarnContext(ctx, "Failed to encrypt external registry token", "registryURL", c.URL, "error", encErr.Error())
 				continue
 			}
-			enabledRegs = append(enabledRegs, models.ContainerRegistry{
+			enabledRegs = append(enabledRegs, containerregistry.ModelContainerRegistry{
 				URL:      c.URL,
 				Username: c.Username,
 				Token:    encToken,
@@ -862,7 +862,7 @@ func (s *ImageUpdateService) checkSingleImageInBatch(
 	ctx context.Context,
 	rc *registry.Client,
 	authMap map[string]regAuth,
-	enabledRegs []models.ContainerRegistry,
+	enabledRegs []containerregistry.ModelContainerRegistry,
 	parts *ImageParts,
 ) *imageupdate.Response {
 
@@ -1064,29 +1064,28 @@ func (s *ImageUpdateService) CleanupOrphanedRecords(ctx context.Context) error {
 		dockerImageIDs[img.ID] = true
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var updateRecords []models.ImageUpdateRecord
-		if err := tx.Find(&updateRecords).Error; err != nil {
-			return fmt.Errorf("failed to query update records: %w", err)
-		}
+	updateRecords, err := s.store.ListImageUpdateRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query update records: %w", err)
+	}
 
-		var idsToDelete []string
-		for _, record := range updateRecords {
-			if !dockerImageIDs[record.ID] {
-				idsToDelete = append(idsToDelete, record.ID)
-			}
+	var idsToDelete []string
+	for _, record := range updateRecords {
+		if !dockerImageIDs[record.ID] {
+			idsToDelete = append(idsToDelete, record.ID)
 		}
+	}
 
-		if len(idsToDelete) > 0 {
-			if err := tx.Delete(&models.ImageUpdateRecord{}, "id IN ?", idsToDelete).Error; err != nil {
-				return fmt.Errorf("failed to delete orphaned records: %w", err)
-			}
-			slog.InfoContext(ctx, "Cleaned up orphaned image update records", "deletedCount", len(idsToDelete))
-		} else {
-			slog.InfoContext(ctx, "No orphaned image update records found")
+	if len(idsToDelete) > 0 {
+		if _, err := s.store.DeleteImageUpdatesByIDs(ctx, idsToDelete); err != nil {
+			return fmt.Errorf("failed to delete orphaned records: %w", err)
 		}
-		return nil
-	})
+		slog.InfoContext(ctx, "Cleaned up orphaned image update records", "deletedCount", len(idsToDelete))
+	} else {
+		slog.InfoContext(ctx, "No orphaned image update records found")
+	}
+
+	return nil
 }
 
 func (s *ImageUpdateService) GetUpdateSummary(ctx context.Context) (*imageupdate.Summary, error) {
@@ -1094,26 +1093,38 @@ func (s *ImageUpdateService) GetUpdateSummary(ctx context.Context) (*imageupdate
 		totalImages       int64
 		imagesWithUpdates int64
 		digestUpdates     int64
-		tagUpdates        int64
 		errorsCount       int64
 	)
 
 	g, groupCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return s.db.WithContext(groupCtx).Model(&models.ImageUpdateRecord{}).Count(&totalImages).Error
+		count, err := s.store.CountImageUpdates(groupCtx)
+		if err == nil {
+			totalImages = count
+		}
+		return err
 	})
 	g.Go(func() error {
-		return s.db.WithContext(groupCtx).Model(&models.ImageUpdateRecord{}).Where("has_update = ?", true).Count(&imagesWithUpdates).Error
+		count, err := s.store.CountImageUpdatesWithUpdate(groupCtx)
+		if err == nil {
+			imagesWithUpdates = count
+		}
+		return err
 	})
 	g.Go(func() error {
-		return s.db.WithContext(groupCtx).Model(&models.ImageUpdateRecord{}).Where("has_update = ? AND update_type = ?", true, "digest").Count(&digestUpdates).Error
+		count, err := s.store.CountImageUpdatesWithUpdateType(groupCtx, "digest")
+		if err == nil {
+			digestUpdates = count
+		}
+		return err
 	})
 	g.Go(func() error {
-		return s.db.WithContext(groupCtx).Model(&models.ImageUpdateRecord{}).Where("has_update = ? AND update_type = ?", true, "tag").Count(&tagUpdates).Error
-	})
-	g.Go(func() error {
-		return s.db.WithContext(groupCtx).Model(&models.ImageUpdateRecord{}).Where("last_error IS NOT NULL").Count(&errorsCount).Error
+		count, err := s.store.CountImageUpdatesWithErrors(groupCtx)
+		if err == nil {
+			errorsCount = count
+		}
+		return err
 	})
 
 	if err := g.Wait(); err != nil {

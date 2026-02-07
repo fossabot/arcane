@@ -46,6 +46,7 @@ import (
 	"github.com/getarcaneapp/arcane/cli/pkg/images"
 	"github.com/getarcaneapp/arcane/cli/pkg/imageupdates"
 	"github.com/getarcaneapp/arcane/cli/pkg/jobschedules"
+	"github.com/getarcaneapp/arcane/cli/pkg/migrate"
 	"github.com/getarcaneapp/arcane/cli/pkg/networks"
 	"github.com/getarcaneapp/arcane/cli/pkg/notifications"
 	"github.com/getarcaneapp/arcane/cli/pkg/projects"
@@ -106,6 +107,7 @@ func init() {
 
 	rootCmd.AddCommand(configClient.ConfigCmd)
 	rootCmd.AddCommand(generate.GenerateCmd)
+	rootCmd.AddCommand(migrate.MigrateCmd)
 	rootCmd.AddCommand(version.VersionCmd)
 
 	// Authentication

@@ -339,9 +339,10 @@ func (h *ProjectHandler) ListProjects(ctx context.Context, input *ListProjectsIn
 			Start: input.Start,
 			Limit: input.Limit,
 		},
-		Filters: map[string]string{
-			"status": input.Status,
-		},
+		Filters: map[string]string{},
+	}
+	if input.Status != "" {
+		params.Filters["status"] = input.Status
 	}
 
 	projects, paginationResp, err := h.projectService.ListProjects(ctx, params)

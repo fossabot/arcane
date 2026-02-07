@@ -19,20 +19,20 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	appfs "github.com/getarcaneapp/arcane/backend/internal/utils/fs"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pagination"
 	templateutil "github.com/getarcaneapp/arcane/backend/internal/utils/template"
+	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/env"
+	"github.com/getarcaneapp/arcane/types/template"
 	tmpl "github.com/getarcaneapp/arcane/types/template"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
-	"gorm.io/gorm"
 )
 
 type remoteCache struct {
-	templates  []models.ComposeTemplate
+	templates  []template.ComposeTemplate
 	lastFetch  time.Time
 	refreshing bool
 }
@@ -43,7 +43,7 @@ type registryFetchMeta struct {
 }
 
 type TemplateService struct {
-	db              *database.DB
+	store           database.TemplateStore
 	httpClient      *http.Client
 	settingsService *SettingsService
 
@@ -68,7 +68,7 @@ func makeRemoteID(registryID, slug string) string {
 	return fmt.Sprintf("%s:%s:%s", remoteIDPrefix, registryID, slug)
 }
 
-func NewTemplateService(ctx context.Context, db *database.DB, httpClient *http.Client, settingsService *SettingsService) *TemplateService {
+func NewTemplateService(ctx context.Context, store database.TemplateStore, httpClient *http.Client, settingsService *SettingsService) *TemplateService {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -78,7 +78,7 @@ func NewTemplateService(ctx context.Context, db *database.DB, httpClient *http.C
 	}
 
 	return &TemplateService{
-		db:                db,
+		store:             store,
 		httpClient:        httpClient,
 		settingsService:   settingsService,
 		remoteCache:       remoteCache{},
@@ -131,7 +131,7 @@ func (s *TemplateService) ensureRemoteTemplatesLoaded(ctx context.Context) error
 	return err
 }
 
-func (s *TemplateService) refreshRemoteTemplates(ctx context.Context) ([]models.ComposeTemplate, error) {
+func (s *TemplateService) refreshRemoteTemplates(ctx context.Context) ([]template.ComposeTemplate, error) {
 	templates, err := s.loadRemoteTemplates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load remote templates: %w", err)
@@ -144,7 +144,7 @@ func (s *TemplateService) refreshRemoteTemplates(ctx context.Context) ([]models.
 	return templates, nil
 }
 
-func (s *TemplateService) GetAllTemplates(ctx context.Context) ([]models.ComposeTemplate, error) {
+func (s *TemplateService) GetAllTemplates(ctx context.Context) ([]template.ComposeTemplate, error) {
 	return s.getMergedTemplates(ctx)
 }
 
@@ -225,23 +225,27 @@ func (s *TemplateService) GetAllTemplatesPaginated(ctx context.Context, params p
 
 var ErrTemplateNotFound = errors.New("template not found")
 
-func (s *TemplateService) GetTemplate(ctx context.Context, id string) (*models.ComposeTemplate, error) {
+func (s *TemplateService) GetTemplate(ctx context.Context, id string) (*template.ComposeTemplate, error) {
 	if err := s.syncFilesystemTemplatesInternal(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to sync filesystem templates", "error", err)
 	}
 
-	var template models.ComposeTemplate
-	if err := s.db.WithContext(ctx).Preload("Registry").Where("id = ?", id).First(&template).Error; err == nil {
-		return &template, nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+	localTemplate, err := s.store.GetComposeTemplateByID(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("failed to query local template: %w", err)
+	}
+	if localTemplate != nil {
+		if err := s.enrichTemplateRegistry(ctx, localTemplate); err != nil {
+			return nil, err
+		}
+		return localTemplate, nil
 	}
 
 	if err := s.ensureRemoteTemplatesLoaded(ctx); err != nil {
 		return nil, fmt.Errorf("template not found (failed to load remote templates): %w", err)
 	}
 	s.remoteMu.RLock()
-	copied := make([]models.ComposeTemplate, len(s.remoteCache.templates))
+	copied := make([]template.ComposeTemplate, len(s.remoteCache.templates))
 	copy(copied, s.remoteCache.templates)
 	s.remoteMu.RUnlock()
 
@@ -255,82 +259,78 @@ func (s *TemplateService) GetTemplate(ctx context.Context, id string) (*models.C
 	return nil, ErrTemplateNotFound
 }
 
-func (s *TemplateService) CreateTemplate(ctx context.Context, template *models.ComposeTemplate) error {
+func (s *TemplateService) CreateTemplate(ctx context.Context, template *template.ComposeTemplate) error {
 	if template.ID == "" {
 		template.ID = uuid.NewString()
 	}
 	template.IsCustom = true
 	template.IsRemote = false
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(template).Error; err != nil {
-			return fmt.Errorf("failed to create template: %w", err)
-		}
-		return nil
-	})
+	created, err := s.store.CreateComposeTemplate(ctx, *template)
+	if err != nil {
+		return fmt.Errorf("failed to create template: %w", err)
+	}
+	*template = *created
+	return nil
 }
 
-func (s *TemplateService) UpdateTemplate(ctx context.Context, id string, updates *models.ComposeTemplate) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing models.ComposeTemplate
-		if err := tx.Where("id = ?", id).First(&existing).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("template not found")
-			}
-			return fmt.Errorf("failed to find template: %w", err)
-		}
+func (s *TemplateService) UpdateTemplate(ctx context.Context, id string, updates *template.ComposeTemplate) error {
+	existing, err := s.store.GetComposeTemplateByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to find template: %w", err)
+	}
+	if existing == nil {
+		return fmt.Errorf("template not found")
+	}
+	if existing.IsRemote {
+		return fmt.Errorf("cannot update remote template")
+	}
 
-		if existing.IsRemote {
-			return fmt.Errorf("cannot update remote template")
-		}
+	existing.Name = updates.Name
+	existing.Description = updates.Description
+	existing.Content = updates.Content
+	existing.EnvContent = updates.EnvContent
 
-		existing.Name = updates.Name
-		existing.Description = updates.Description
-		existing.Content = updates.Content
-		existing.EnvContent = updates.EnvContent
-
-		if err := tx.Save(&existing).Error; err != nil {
-			return fmt.Errorf("failed to update template: %w", err)
-		}
-
-		return nil
-	})
+	if _, err := s.store.SaveComposeTemplate(ctx, *existing); err != nil {
+		return fmt.Errorf("failed to update template: %w", err)
+	}
+	return nil
 }
 
 func (s *TemplateService) DeleteTemplate(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing models.ComposeTemplate
-		if err := tx.Where("id = ?", id).First(&existing).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("template not found")
-			}
-			return fmt.Errorf("failed to find template: %w", err)
-		}
+	existing, err := s.store.GetComposeTemplateByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to find template: %w", err)
+	}
+	if existing == nil {
+		return fmt.Errorf("template not found")
+	}
+	if existing.IsRemote {
+		return fmt.Errorf("cannot delete remote template directly")
+	}
 
-		if existing.IsRemote {
-			return fmt.Errorf("cannot delete remote template directly")
-		}
+	baseDir, err := appfs.GetTemplatesDirectory(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get templates directory: %w", err)
+	}
+	templatePath := filepath.Join(baseDir, existing.Name)
 
-		baseDir, err := appfs.GetTemplatesDirectory(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get templates directory: %w", err)
-		} else {
-			templatePath := filepath.Join(baseDir, existing.Name)
-
-			if stat, err := os.Stat(templatePath); err == nil && stat.IsDir() {
-				composeFile := filepath.Join(templatePath, "compose.yaml")
-				if _, err := os.Stat(composeFile); err == nil {
-					if err := os.RemoveAll(templatePath); err != nil {
-						return fmt.Errorf("failed to delete template directory: %w", err)
-					}
-				}
+	if stat, err := os.Stat(templatePath); err == nil && stat.IsDir() {
+		composeFile := filepath.Join(templatePath, "compose.yaml")
+		if _, err := os.Stat(composeFile); err == nil {
+			if err := os.RemoveAll(templatePath); err != nil {
+				return fmt.Errorf("failed to delete template directory: %w", err)
 			}
 		}
+	}
 
-		if err := tx.Delete(&existing).Error; err != nil {
-			return fmt.Errorf("failed to delete template: %w", err)
-		}
-		return nil
-	})
+	deleted, err := s.store.DeleteComposeTemplateByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete template: %w", err)
+	}
+	if !deleted {
+		return fmt.Errorf("template not found")
+	}
+	return nil
 }
 
 func (s *TemplateService) GetComposeTemplate() string {
@@ -365,16 +365,15 @@ func (s *TemplateService) SaveEnvTemplate(content string) error {
 	return appfs.WriteTemplateFile(envPath, content)
 }
 
-func (s *TemplateService) GetRegistries(ctx context.Context) ([]models.TemplateRegistry, error) {
-	var registries []models.TemplateRegistry
-	err := s.db.WithContext(ctx).Find(&registries).Error
+func (s *TemplateService) GetRegistries(ctx context.Context) ([]template.ModelTemplateRegistry, error) {
+	registries, err := s.store.ListTemplateRegistries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get registries: %w", err)
 	}
 	return registries, nil
 }
 
-func (s *TemplateService) CreateRegistry(ctx context.Context, registry *models.TemplateRegistry) error {
+func (s *TemplateService) CreateRegistry(ctx context.Context, registry *template.ModelTemplateRegistry) error {
 	// Hydrate metadata if needed
 	if registry.Name == "" || registry.Description == "" {
 		if registry.URL == "" {
@@ -396,50 +395,43 @@ func (s *TemplateService) CreateRegistry(ctx context.Context, registry *models.T
 		registry.ID = uuid.NewString()
 	}
 
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(registry).Error; err != nil {
-			return fmt.Errorf("failed to create registry: %w", err)
-		}
-		return nil
-	})
+	created, err := s.store.CreateTemplateRegistry(ctx, *registry)
 	if err != nil {
+		return fmt.Errorf("failed to create registry: %w", err)
+	}
+	*registry = *created
+
+	s.invalidateRemoteCache()
+	return nil
+}
+
+func (s *TemplateService) UpdateRegistry(ctx context.Context, id string, updates *template.ModelTemplateRegistry) error {
+	existing, err := s.store.GetTemplateRegistryByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to find registry: %w", err)
+	}
+	if existing == nil {
+		return errors.New("registry not found")
+	}
+
+	if err := s.hydrateRegistryUpdates(ctx, updates, existing); err != nil {
 		return err
+	}
+
+	existing.Name = updates.Name
+	existing.URL = updates.URL
+	existing.Description = updates.Description
+	existing.Enabled = updates.Enabled
+
+	if _, err := s.store.SaveTemplateRegistry(ctx, *existing); err != nil {
+		return fmt.Errorf("failed to update registry: %w", err)
 	}
 
 	s.invalidateRemoteCache()
 	return nil
 }
 
-func (s *TemplateService) UpdateRegistry(ctx context.Context, id string, updates *models.TemplateRegistry) error {
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing models.TemplateRegistry
-		if err := tx.Where("id = ?", id).First(&existing).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.New("registry not found")
-			}
-			return fmt.Errorf("failed to find registry: %w", err)
-		}
-
-		if err := s.hydrateRegistryUpdates(ctx, updates, &existing); err != nil {
-			return err
-		}
-
-		if err := tx.Model(&models.TemplateRegistry{}).Where("id = ?", id).
-			Select("Name", "URL", "Description", "Enabled").
-			Updates(updates).Error; err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	s.invalidateRemoteCache()
-	return nil
-}
-
-func (s *TemplateService) hydrateRegistryUpdates(ctx context.Context, updates, existing *models.TemplateRegistry) error {
+func (s *TemplateService) hydrateRegistryUpdates(ctx context.Context, updates, existing *template.ModelTemplateRegistry) error {
 	urlChanged := updates.URL != "" && updates.URL != existing.URL
 	needsHydration := updates.Name == "" || updates.Description == ""
 
@@ -463,25 +455,19 @@ func (s *TemplateService) hydrateRegistryUpdates(ctx context.Context, updates, e
 }
 
 func (s *TemplateService) DeleteRegistry(ctx context.Context, id string) error {
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id = ?", id).Delete(&models.TemplateRegistry{})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return errors.New("registry not found")
-		}
-		return nil
-	})
+	deleted, err := s.store.DeleteTemplateRegistryByID(ctx, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to delete registry: %w", err)
+	}
+	if !deleted {
+		return errors.New("registry not found")
 	}
 
 	s.invalidateRemoteCache()
 	return nil
 }
 
-func (s *TemplateService) loadRemoteTemplates(ctx context.Context) ([]models.ComposeTemplate, error) {
+func (s *TemplateService) loadRemoteTemplates(ctx context.Context) ([]template.ComposeTemplate, error) {
 	registries, err := s.GetRegistries(ctx)
 	if err != nil {
 		return nil, err
@@ -489,7 +475,7 @@ func (s *TemplateService) loadRemoteTemplates(ctx context.Context) ([]models.Com
 
 	var (
 		mu        sync.Mutex
-		templates []models.ComposeTemplate
+		templates []template.ComposeTemplate
 	)
 
 	g, groupCtx := errgroup.WithContext(ctx)
@@ -552,7 +538,7 @@ func (s *TemplateService) doGET(ctx context.Context, url string) ([]byte, error)
 
 // fetchRegistryTemplates performs a conditional GET using If-Modified-Since.
 // If the server replies 304 Not Modified, cached templates for the registry are reused.
-func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *models.TemplateRegistry) ([]tmpl.RemoteTemplate, error) {
+func (s *TemplateService) fetchRegistryTemplates(ctx context.Context, reg *template.ModelTemplateRegistry) ([]tmpl.RemoteTemplate, error) {
 	s.registryMu.RLock()
 	fetchMeta := s.registryFetchMeta[reg.ID]
 	s.registryMu.RUnlock()
@@ -618,11 +604,11 @@ func (s *TemplateService) fetchRegistryManifest(ctx context.Context, url string)
 	return &reg, nil
 }
 
-func (s *TemplateService) convertRemoteToLocal(remote tmpl.RemoteTemplate, registry *models.TemplateRegistry) models.ComposeTemplate {
+func (s *TemplateService) convertRemoteToLocal(remote tmpl.RemoteTemplate, registry *template.ModelTemplateRegistry) template.ComposeTemplate {
 	publicID := makeRemoteID(registry.ID, remote.ID)
 
-	return models.ComposeTemplate{
-		BaseModel:   models.BaseModel{ID: publicID},
+	return template.ComposeTemplate{
+		BaseModel:   base.BaseModel{ID: publicID},
 		Name:        remote.Name,
 		Description: remote.Description,
 		Content:     "",
@@ -631,7 +617,7 @@ func (s *TemplateService) convertRemoteToLocal(remote tmpl.RemoteTemplate, regis
 		IsRemote:    true,
 		RegistryID:  &registry.ID,
 		Registry:    registry,
-		Metadata: &models.ComposeTemplateMetadata{
+		Metadata: &template.ComposeTemplateMetadata{
 			Version:          &remote.Version,
 			Author:           &remote.Author,
 			Tags:             remote.Tags,
@@ -642,7 +628,7 @@ func (s *TemplateService) convertRemoteToLocal(remote tmpl.RemoteTemplate, regis
 	}
 }
 
-func (s *TemplateService) FetchTemplateContent(ctx context.Context, template *models.ComposeTemplate) (string, string, error) {
+func (s *TemplateService) FetchTemplateContent(ctx context.Context, template *template.ComposeTemplate) (string, string, error) {
 	if !template.IsRemote || template.Metadata == nil || template.Metadata.RemoteURL == nil {
 		return template.Content, "", fmt.Errorf("not a remote template or missing remote URL")
 	}
@@ -672,92 +658,76 @@ func (s *TemplateService) fetchURL(ctx context.Context, url string) (string, err
 	return string(body), nil
 }
 
-func (s *TemplateService) DownloadTemplate(ctx context.Context, remoteTemplate *models.ComposeTemplate) (*models.ComposeTemplate, error) {
+func (s *TemplateService) DownloadTemplate(ctx context.Context, remoteTemplate *template.ComposeTemplate) (*template.ComposeTemplate, error) {
 	if !remoteTemplate.IsRemote {
 		return nil, fmt.Errorf("template is not remote")
 	}
 
-	base := s.templateBaseFromRemote(remoteTemplate)
+	templateBase := s.templateBaseFromRemote(remoteTemplate)
 
-	dir, composePath, envPath, err := appfs.EnsureTemplateDir(ctx, base)
+	dir, composePath, envPath, err := appfs.EnsureTemplateDir(ctx, templateBase)
 	if err != nil {
 		return nil, err
 	}
 	srcDesc := appfs.ImportedComposeDescription(dir)
 
-	return s.downloadTemplateTransaction(ctx, remoteTemplate, base, composePath, envPath, srcDesc)
+	return s.downloadTemplateTransaction(ctx, remoteTemplate, templateBase, composePath, envPath, srcDesc)
 }
 
-func (s *TemplateService) downloadTemplateTransaction(ctx context.Context, remoteTemplate *models.ComposeTemplate, base, composePath, envPath, srcDesc string) (*models.ComposeTemplate, error) {
-	var resultTemplate *models.ComposeTemplate
-
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing models.ComposeTemplate
-		if err := tx.
-			Where("is_remote = ? AND registry_id IS NULL AND (description = ? OR name = ?)", false, srcDesc, base).
-			First(&existing).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("failed to check existing template: %w", err)
-		} else if err == nil {
-			// Existing template found
-			composeContent, envContent, err := s.FetchTemplateContent(ctx, remoteTemplate)
-			if err != nil {
-				return fmt.Errorf("failed to fetch template content for existing local template: %w", err)
-			}
-
-			envPtr, werr := appfs.WriteTemplateFiles(composePath, envPath, composeContent, envContent)
-			if werr != nil {
-				return werr
-			}
-
-			existing.Content = composeContent
-			existing.EnvContent = envPtr
-			existing.Metadata = cloneTemplateMetadata(remoteTemplate.Metadata)
-
-			if err := tx.Save(&existing).Error; err != nil {
-				return fmt.Errorf("failed to update existing local template: %w", err)
-			}
-			resultTemplate = &existing
-			return nil
-		}
-
-		// New template
-		composeContent, envContent, err := s.FetchTemplateContent(ctx, remoteTemplate)
-		if err != nil {
-			return fmt.Errorf("failed to fetch template content for download: %w", err)
-		}
-
-		envPtr, werr := appfs.WriteTemplateFiles(composePath, envPath, composeContent, envContent)
-		if werr != nil {
-			return werr
-		}
-
-		localTemplate := &models.ComposeTemplate{
-			BaseModel:   models.BaseModel{ID: uuid.NewString()},
-			Name:        base,
-			Description: srcDesc,
-			Content:     composeContent,
-			EnvContent:  envPtr,
-			IsCustom:    true,
-			IsRemote:    false,
-			RegistryID:  nil,
-			Registry:    nil,
-			Metadata:    cloneTemplateMetadata(remoteTemplate.Metadata),
-		}
-
-		if err := tx.Create(localTemplate).Error; err != nil {
-			return fmt.Errorf("failed to save local template: %w", err)
-		}
-		resultTemplate = localTemplate
-		return nil
-	})
-
+func (s *TemplateService) downloadTemplateTransaction(ctx context.Context, remoteTemplate *template.ComposeTemplate, templateBase, composePath, envPath, srcDesc string) (*template.ComposeTemplate, error) {
+	existing, err := s.store.FindLocalComposeTemplateByDescriptionOrName(ctx, srcDesc, templateBase)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to check existing template: %w", err)
 	}
-	return resultTemplate, nil
+
+	composeContent, envContent, err := s.FetchTemplateContent(ctx, remoteTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch template content for download: %w", err)
+	}
+
+	envPtr, werr := appfs.WriteTemplateFiles(composePath, envPath, composeContent, envContent)
+	if werr != nil {
+		return nil, werr
+	}
+
+	if existing != nil {
+		existing.Content = composeContent
+		existing.EnvContent = envPtr
+		existing.Metadata = cloneTemplateMetadata(remoteTemplate.Metadata)
+		saved, saveErr := s.store.SaveComposeTemplate(ctx, *existing)
+		if saveErr != nil {
+			return nil, fmt.Errorf("failed to update existing local template: %w", saveErr)
+		}
+		if saved != nil {
+			return saved, nil
+		}
+		return existing, nil
+	}
+
+	localTemplate := template.ComposeTemplate{
+		BaseModel:   base.BaseModel{ID: uuid.NewString()},
+		Name:        templateBase,
+		Description: srcDesc,
+		Content:     composeContent,
+		EnvContent:  envPtr,
+		IsCustom:    true,
+		IsRemote:    false,
+		RegistryID:  nil,
+		Registry:    nil,
+		Metadata:    cloneTemplateMetadata(remoteTemplate.Metadata),
+	}
+	created, createErr := s.store.CreateComposeTemplate(ctx, localTemplate)
+	if createErr != nil {
+		return nil, fmt.Errorf("failed to save local template: %w", createErr)
+	}
+
+	if created == nil {
+		return nil, fmt.Errorf("failed to save local template")
+	}
+	return created, nil
 }
 
-func (s *TemplateService) templateBaseFromRemote(remoteTemplate *models.ComposeTemplate) string {
+func (s *TemplateService) templateBaseFromRemote(remoteTemplate *template.ComposeTemplate) string {
 	base := appfs.Slugify(remoteTemplate.Name)
 	if base != "" {
 		return base
@@ -772,11 +742,11 @@ func (s *TemplateService) templateBaseFromRemote(remoteTemplate *models.ComposeT
 	return base
 }
 
-func cloneTemplateMetadata(meta *models.ComposeTemplateMetadata) *models.ComposeTemplateMetadata {
+func cloneTemplateMetadata(meta *template.ComposeTemplateMetadata) *template.ComposeTemplateMetadata {
 	if meta == nil {
 		return nil
 	}
-	return &models.ComposeTemplateMetadata{
+	return &template.ComposeTemplateMetadata{
 		Version:          meta.Version,
 		Author:           meta.Author,
 		Tags:             meta.Tags,
@@ -784,6 +754,44 @@ func cloneTemplateMetadata(meta *models.ComposeTemplateMetadata) *models.Compose
 		EnvURL:           meta.EnvURL,
 		DocumentationURL: meta.DocumentationURL,
 	}
+}
+
+func (s *TemplateService) enrichTemplateRegistry(ctx context.Context, template *template.ComposeTemplate) error {
+	if template == nil || template.RegistryID == nil || *template.RegistryID == "" {
+		return nil
+	}
+	registry, err := s.store.GetTemplateRegistryByID(ctx, *template.RegistryID)
+	if err != nil {
+		return fmt.Errorf("failed to load template registry: %w", err)
+	}
+	template.Registry = registry
+	return nil
+}
+
+func (s *TemplateService) enrichTemplateRegistries(ctx context.Context, templates []template.ComposeTemplate) error {
+	if len(templates) == 0 {
+		return nil
+	}
+
+	registries, err := s.store.ListTemplateRegistries(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load template registries: %w", err)
+	}
+	registryByID := make(map[string]*template.ModelTemplateRegistry, len(registries))
+	for i := range registries {
+		registryByID[registries[i].ID] = &registries[i]
+	}
+
+	for i := range templates {
+		if templates[i].RegistryID == nil || *templates[i].RegistryID == "" {
+			continue
+		}
+		if reg, ok := registryByID[*templates[i].RegistryID]; ok {
+			templates[i].Registry = reg
+		}
+	}
+
+	return nil
 }
 
 func (s *TemplateService) invalidateRemoteCache() {
@@ -801,44 +809,38 @@ func (s *TemplateService) SyncLocalTemplatesFromFilesystem(ctx context.Context) 
 }
 
 func (s *TemplateService) upsertFilesystemTemplate(ctx context.Context, name, desc, compose string, envPtr *string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing models.ComposeTemplate
-		q := tx.
-			Where("is_remote = ? AND registry_id IS NULL AND description = ?", false, desc).
-			First(&existing)
-
-		if q.Error == nil {
-			existing.Name = name
-			existing.Content = compose
-			existing.EnvContent = envPtr
-			existing.IsCustom = true
-			existing.IsRemote = false
-			if err := tx.Save(&existing).Error; err != nil {
-				return fmt.Errorf("update template %s: %w", existing.ID, err)
-			}
-			return nil
-		}
-		if !errors.Is(q.Error, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("query existing template: %w", q.Error)
-		}
-
-		tpl := &models.ComposeTemplate{
-			BaseModel:   models.BaseModel{ID: uuid.NewString()},
-			Name:        name,
-			Description: desc,
-			Content:     compose,
-			EnvContent:  envPtr,
-			IsCustom:    true,
-			IsRemote:    false,
-			RegistryID:  nil,
-			Registry:    nil,
-			Metadata:    nil,
-		}
-		if err := tx.Create(tpl).Error; err != nil {
-			return fmt.Errorf("insert template %s: %w", name, err)
+	existing, err := s.store.FindLocalComposeTemplateByDescription(ctx, desc)
+	if err != nil {
+		return fmt.Errorf("query existing template: %w", err)
+	}
+	if existing != nil {
+		existing.Name = name
+		existing.Content = compose
+		existing.EnvContent = envPtr
+		existing.IsCustom = true
+		existing.IsRemote = false
+		if _, err := s.store.SaveComposeTemplate(ctx, *existing); err != nil {
+			return fmt.Errorf("update template %s: %w", existing.ID, err)
 		}
 		return nil
-	})
+	}
+
+	tpl := template.ComposeTemplate{
+		BaseModel:   base.BaseModel{ID: uuid.NewString()},
+		Name:        name,
+		Description: desc,
+		Content:     compose,
+		EnvContent:  envPtr,
+		IsCustom:    true,
+		IsRemote:    false,
+		RegistryID:  nil,
+		Registry:    nil,
+		Metadata:    nil,
+	}
+	if _, err := s.store.CreateComposeTemplate(ctx, tpl); err != nil {
+		return fmt.Errorf("insert template %s: %w", name, err)
+	}
+	return nil
 }
 
 func (s *TemplateService) processFolderEntry(ctx context.Context, baseDir, folder string) error {
@@ -1084,22 +1086,28 @@ func (s *TemplateService) GetTemplateContentWithParsedData(ctx context.Context, 
 	}, nil
 }
 
-func (s *TemplateService) getMergedTemplates(ctx context.Context) ([]models.ComposeTemplate, error) {
+func (s *TemplateService) getMergedTemplates(ctx context.Context) ([]template.ComposeTemplate, error) {
 	if err := s.syncFilesystemTemplatesInternal(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to sync filesystem templates", "error", err)
 	}
 
-	var templates []models.ComposeTemplate
-	// Use Omit to avoid fetching heavy content fields which are not needed for listing
-	if err := s.db.WithContext(ctx).Omit("Content", "EnvContent").Preload("Registry").Find(&templates).Error; err != nil {
+	templates, err := s.store.ListComposeTemplates(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get local templates: %w", err)
+	}
+	if err := s.enrichTemplateRegistries(ctx, templates); err != nil {
+		return nil, err
+	}
+	for i := range templates {
+		templates[i].Content = ""
+		templates[i].EnvContent = nil
 	}
 
 	if err := s.ensureRemoteTemplatesLoaded(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to load remote templates", "error", err)
 	} else {
 		s.remoteMu.RLock()
-		copied := make([]models.ComposeTemplate, len(s.remoteCache.templates))
+		copied := make([]template.ComposeTemplate, len(s.remoteCache.templates))
 		copy(copied, s.remoteCache.templates)
 		s.remoteMu.RUnlock()
 

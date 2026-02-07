@@ -21,10 +21,10 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/stringutils"
 	"github.com/getarcaneapp/arcane/types/auth"
+	"github.com/getarcaneapp/arcane/types/settings"
 )
 
 type OidcService struct {
@@ -64,7 +64,7 @@ func NewOidcService(authService *AuthService, cfg *config.Config, httpClient *ht
 	}
 }
 
-func (s *OidcService) getEffectiveConfig(ctx context.Context) (*models.OidcConfig, error) {
+func (s *OidcService) getEffectiveConfig(ctx context.Context) (*settings.OidcConfig, error) {
 	config, err := s.authService.GetOidcConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get OIDC config: %w", err)
@@ -145,11 +145,11 @@ func (s *OidcService) ensureOpenIDScope(scopes []string) []string {
 	return scopes
 }
 
-func (s *OidcService) hasManualEndpoints(cfg *models.OidcConfig) bool {
+func (s *OidcService) hasManualEndpoints(cfg *settings.OidcConfig) bool {
 	return cfg.AuthorizationEndpoint != "" || cfg.TokenEndpoint != "" || cfg.UserinfoEndpoint != ""
 }
 
-func (s *OidcService) getOauth2Config(cfg *models.OidcConfig, provider *oidc.Provider, origin string) (oauth2.Config, error) {
+func (s *OidcService) getOauth2Config(cfg *settings.OidcConfig, provider *oidc.Provider, origin string) (oauth2.Config, error) {
 	scopes := strings.Fields(cfg.Scopes)
 	if len(scopes) == 0 {
 		scopes = []string{"email", "profile"}
@@ -237,7 +237,7 @@ func (s *OidcService) GetOidcRedirectURL(origin string) string {
 	return baseUrl + "/auth/oidc/callback"
 }
 
-func (s *OidcService) getOrDiscoverProvider(ctx context.Context, cfg *models.OidcConfig) (*oidc.Provider, error) {
+func (s *OidcService) getOrDiscoverProvider(ctx context.Context, cfg *settings.OidcConfig) (*oidc.Provider, error) {
 	issuer := cfg.IssuerURL
 	skipTls := cfg.SkipTlsVerify
 
@@ -316,7 +316,7 @@ func (s *OidcService) discoverProvider(ctx context.Context, issuer string) (*oid
 	return nil, issuer, err
 }
 
-func (s *OidcService) exchangeToken(ctx context.Context, cfg *models.OidcConfig, provider *oidc.Provider, code string, verifier string, origin string) (*oauth2.Token, error) {
+func (s *OidcService) exchangeToken(ctx context.Context, cfg *settings.OidcConfig, provider *oidc.Provider, code string, verifier string, origin string) (*oauth2.Token, error) {
 	oauth2Config, err := s.getOauth2Config(cfg, provider, origin)
 	if err != nil {
 		return nil, err
@@ -333,7 +333,7 @@ func (s *OidcService) exchangeToken(ctx context.Context, cfg *models.OidcConfig,
 	return token, nil
 }
 
-func (s *OidcService) fetchClaims(ctx context.Context, cfg *models.OidcConfig, provider *oidc.Provider, token *oauth2.Token, idToken *oidc.IDToken) (map[string]any, error) {
+func (s *OidcService) fetchClaims(ctx context.Context, cfg *settings.OidcConfig, provider *oidc.Provider, token *oauth2.Token, idToken *oidc.IDToken) (map[string]any, error) {
 	providerCtx := oidc.ClientContext(ctx, s.getHttpClient(cfg.SkipTlsVerify))
 	var claims map[string]any
 
@@ -393,7 +393,7 @@ func (s *OidcService) fetchClaims(ctx context.Context, cfg *models.OidcConfig, p
 	return claims, nil
 }
 
-func (s *OidcService) fetchUserInfoClaims(ctx context.Context, cfg *models.OidcConfig, token *oauth2.Token) (map[string]any, error) {
+func (s *OidcService) fetchUserInfoClaims(ctx context.Context, cfg *settings.OidcConfig, token *oauth2.Token) (map[string]any, error) {
 	if cfg.UserinfoEndpoint == "" {
 		return nil, errors.New("userinfo endpoint not configured")
 	}
@@ -487,7 +487,7 @@ func (s *OidcService) validateState(state, storedState string) (*OidcState, erro
 	return stateData, nil
 }
 
-func (s *OidcService) verifyIDToken(ctx context.Context, provider *oidc.Provider, cfg *models.OidcConfig, token *oauth2.Token, nonce string) (*oidc.IDToken, string, error) {
+func (s *OidcService) verifyIDToken(ctx context.Context, provider *oidc.Provider, cfg *settings.OidcConfig, token *oauth2.Token, nonce string) (*oidc.IDToken, string, error) {
 	var rawIDToken string
 	if idTokenValue := token.Extra("id_token"); idTokenValue != nil {
 		if idTokenStr, ok := idTokenValue.(string); ok {
@@ -544,7 +544,7 @@ func (s *OidcService) verifyIDToken(ctx context.Context, provider *oidc.Provider
 	return idToken, rawIDToken, nil
 }
 
-func (s *OidcService) buildUserInfo(ctx context.Context, provider *oidc.Provider, cfg *models.OidcConfig, token *oauth2.Token, idToken *oidc.IDToken, rawIDToken string) (*auth.OidcUserInfo, *auth.OidcTokenResponse, error) {
+func (s *OidcService) buildUserInfo(ctx context.Context, provider *oidc.Provider, cfg *settings.OidcConfig, token *oauth2.Token, idToken *oidc.IDToken, rawIDToken string) (*auth.OidcUserInfo, *auth.OidcTokenResponse, error) {
 	claims, err := s.fetchClaims(ctx, cfg, provider, token, idToken)
 	if err != nil {
 		slog.Error("HandleCallback: failed to fetch claims", "error", err)
@@ -680,7 +680,7 @@ func (s *OidcService) InitiateDeviceAuth(ctx context.Context) (*auth.OidcDeviceA
 }
 
 // getDeviceAuthorizationEndpoint discovers or returns the configured device authorization endpoint.
-func (s *OidcService) getDeviceAuthorizationEndpoint(ctx context.Context, cfg *models.OidcConfig) (string, error) {
+func (s *OidcService) getDeviceAuthorizationEndpoint(ctx context.Context, cfg *settings.OidcConfig) (string, error) {
 	if cfg.DeviceAuthorizationEndpoint != "" {
 		return cfg.DeviceAuthorizationEndpoint, nil
 	}

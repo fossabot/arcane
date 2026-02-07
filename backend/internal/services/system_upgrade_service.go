@@ -15,9 +15,11 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	imagetypes "github.com/docker/docker/api/types/image"
 	mounttypes "github.com/docker/docker/api/types/mount"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	dockerutils "github.com/getarcaneapp/arcane/backend/internal/utils/docker"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/timeouts"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/event"
+	"github.com/getarcaneapp/arcane/types/user"
 )
 
 var (
@@ -75,7 +77,7 @@ func (s *SystemUpgradeService) CanUpgrade(ctx context.Context) (bool, error) {
 
 // TriggerUpgradeViaCLI spawns the upgrade CLI command in a separate container
 // This avoids self-termination issues by running the upgrade from outside
-func (s *SystemUpgradeService) TriggerUpgradeViaCLI(ctx context.Context, user models.User) error {
+func (s *SystemUpgradeService) TriggerUpgradeViaCLI(ctx context.Context, user user.ModelUser) error {
 	if !s.upgrading.CompareAndSwap(false, true) {
 		return ErrUpgradeInProgress
 	}
@@ -103,13 +105,13 @@ func (s *SystemUpgradeService) TriggerUpgradeViaCLI(ctx context.Context, user mo
 	}
 
 	// Log upgrade event
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action":        "system_upgrade_cli",
 		"containerId":   containerId,
 		"containerName": containerName,
 		"method":        "cli",
 	}
-	if err := s.eventService.LogUserEvent(ctx, models.EventTypeSystemUpgrade, user.ID, user.Username, metadata); err != nil {
+	if err := s.eventService.LogUserEvent(ctx, event.EventTypeSystemUpgrade, user.ID, user.Username, metadata); err != nil {
 		slog.Warn("Failed to log upgrade event", "error", err)
 	}
 

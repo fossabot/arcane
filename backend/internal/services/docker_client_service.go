@@ -12,22 +12,19 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/getarcaneapp/arcane/backend/internal/config"
-	"github.com/getarcaneapp/arcane/backend/internal/database"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/docker"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/timeouts"
 )
 
 type DockerClientService struct {
-	db              *database.DB
 	config          *config.Config
 	settingsService *SettingsService
 	client          *client.Client
 	mu              sync.Mutex
 }
 
-func NewDockerClientService(db *database.DB, cfg *config.Config, settingsService *SettingsService) *DockerClientService {
+func NewDockerClientService(cfg *config.Config, settingsService *SettingsService) *DockerClientService {
 	return &DockerClientService{
-		db:              db,
 		config:          cfg,
 		settingsService: settingsService,
 	}

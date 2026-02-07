@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	"github.com/nicholas-fedor/shoutrrr/pkg/services/chat/signal"
 )
 
 // BuildSignalURL converts SignalConfig to Shoutrrr URL format using shoutrrr's Config
-func BuildSignalURL(config models.SignalConfig) (string, error) {
+func BuildSignalURL(config notification.SignalConfig) (string, error) {
 	signalConfig := &signal.Config{
 		Host:       config.Host,
 		Port:       config.Port,
@@ -27,7 +27,7 @@ func BuildSignalURL(config models.SignalConfig) (string, error) {
 }
 
 // SendSignal sends a message via Shoutrrr Signal using proper service configuration
-func SendSignal(ctx context.Context, config models.SignalConfig, message string) error {
+func SendSignal(ctx context.Context, config notification.SignalConfig, message string) error {
 	if config.Host == "" {
 		return fmt.Errorf("signal host is empty")
 	}

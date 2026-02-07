@@ -8,9 +8,10 @@ import (
 	"strings"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/cookie"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/user"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,7 +28,7 @@ type AuthOptions struct {
 }
 
 type ApiKeyValidator interface {
-	ValidateApiKey(ctx context.Context, rawKey string) (*models.User, error)
+	ValidateApiKey(ctx context.Context, rawKey string) (*user.ModelUser, error)
 }
 
 type AuthMiddleware struct {
@@ -99,7 +100,7 @@ func (m *AuthMiddleware) agentAuth(ctx context.Context, c *gin.Context) {
 		"has_agent_token_hdr", c.GetHeader(headerAgentToken) != "",
 		"agent_token_config_set", m.cfg.AgentToken != "",
 	)
-	c.JSON(http.StatusForbidden, models.APIError{
+	c.JSON(http.StatusForbidden, base.APIError{
 		Code:    "FORBIDDEN",
 		Message: "Invalid or missing agent token",
 	})
@@ -113,7 +114,7 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 		if err == nil && user != nil {
 			isAdmin := userHasRole(user, "admin")
 			if m.options.AdminRequired && !isAdmin {
-				c.JSON(http.StatusForbidden, models.APIError{
+				c.JSON(http.StatusForbidden, base.APIError{
 					Code:    "FORBIDDEN",
 					Message: "You don't have permission to access this resource",
 				})
@@ -128,8 +129,8 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 			return
 		}
 		// If API key validation fails, return unauthorized
-		c.JSON(http.StatusUnauthorized, models.APIError{
-			Code:    models.APIErrorCodeUnauthorized,
+		c.JSON(http.StatusUnauthorized, base.APIError{
+			Code:    base.APIErrorCodeUnauthorized,
 			Message: "Invalid or expired API key",
 		})
 		c.Abort()
@@ -142,8 +143,8 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 			c.Next()
 			return
 		}
-		c.JSON(http.StatusUnauthorized, models.APIError{
-			Code:    models.APIErrorCodeUnauthorized,
+		c.JSON(http.StatusUnauthorized, base.APIError{
+			Code:    base.APIErrorCodeUnauthorized,
 			Message: "Authentication required",
 		})
 		c.Abort()
@@ -154,8 +155,8 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, services.ErrTokenVersionMismatch) {
 			cookie.ClearTokenCookie(c)
-			c.JSON(http.StatusUnauthorized, models.APIError{
-				Code:    models.APIErrorCodeUnauthorized,
+			c.JSON(http.StatusUnauthorized, base.APIError{
+				Code:    base.APIErrorCodeUnauthorized,
 				Message: "Application has been updated. Please log in again.",
 			})
 			c.Abort()
@@ -166,8 +167,8 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 			c.Next()
 			return
 		}
-		c.JSON(http.StatusUnauthorized, models.APIError{
-			Code:    models.APIErrorCodeUnauthorized,
+		c.JSON(http.StatusUnauthorized, base.APIError{
+			Code:    base.APIErrorCodeUnauthorized,
 			Message: "Invalid or expired token",
 		})
 		c.Abort()
@@ -176,7 +177,7 @@ func (m *AuthMiddleware) managerAuth(ctx context.Context, c *gin.Context) {
 
 	isAdmin := userHasRole(user, "admin")
 	if m.options.AdminRequired && !isAdmin {
-		c.JSON(http.StatusForbidden, models.APIError{
+		c.JSON(http.StatusForbidden, base.APIError{
 			Code:    "FORBIDDEN",
 			Message: "You don't have permission to access this resource",
 		})
@@ -196,8 +197,8 @@ func isPreflight(c *gin.Context) bool {
 
 func agentSudo(c *gin.Context) {
 	email := "agent@getarcane.app"
-	agentUser := &models.User{
-		BaseModel: models.BaseModel{ID: "agent"},
+	agentUser := &user.ModelUser{
+		BaseModel: base.BaseModel{ID: "agent"},
 		Email:     &email,
 		Roles:     []string{"admin"},
 	}
@@ -218,7 +219,7 @@ func extractBearerOrCookieToken(c *gin.Context) string {
 	return ""
 }
 
-func userHasRole(user *models.User, role string) bool {
+func userHasRole(user *user.ModelUser, role string) bool {
 	for _, r := range user.Roles {
 		if r == role {
 			return true

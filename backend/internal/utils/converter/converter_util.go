@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/system"
 )
 
-func ParseTokens(tokens []string, result *models.DockerRunCommand) error {
+func ParseTokens(tokens []string, result *system.DockerRunCommand) error {
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
 
@@ -33,7 +33,7 @@ func ParseTokens(tokens []string, result *models.DockerRunCommand) error {
 	return nil
 }
 
-func parseFlag(token string, tokens []string, index int, result *models.DockerRunCommand) (int, error) {
+func parseFlag(token string, tokens []string, index int, result *system.DockerRunCommand) (int, error) {
 	switch token {
 	case "-d", "--detach":
 		result.Detached = true
@@ -55,7 +55,7 @@ func parseFlag(token string, tokens []string, index int, result *models.DockerRu
 	}
 }
 
-func parseFlagWithValue(token string, tokens []string, index int, result *models.DockerRunCommand) (int, error) {
+func parseFlagWithValue(token string, tokens []string, index int, result *system.DockerRunCommand) (int, error) {
 	switch token {
 	case "--name":
 		return parseStringFlag(token, tokens, index, &result.Name)
@@ -116,7 +116,7 @@ func parseSliceFlag(flagName string, tokens []string, index int, target *[]strin
 	return 1, nil
 }
 
-func parseUnknownFlag(token string, tokens []string, index int, result *models.DockerRunCommand) (int, error) {
+func parseUnknownFlag(token string, tokens []string, index int, result *system.DockerRunCommand) (int, error) {
 	if !strings.HasPrefix(token, "--") && len(token) > 2 {
 		parseCombinedFlags(token, result)
 		return 0, nil
@@ -129,7 +129,7 @@ func parseUnknownFlag(token string, tokens []string, index int, result *models.D
 	return 0, nil
 }
 
-func parseCombinedFlags(token string, result *models.DockerRunCommand) {
+func parseCombinedFlags(token string, result *system.DockerRunCommand) {
 	flags := strings.Split(token[1:], "")
 	for _, flag := range flags {
 		switch flag {

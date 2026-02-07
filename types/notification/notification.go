@@ -27,6 +27,9 @@ const (
 	// NotificationProviderPushover is the builtin Pushover notification provider.
 	NotificationProviderPushover Provider = "pushover"
 
+	// NotificationProviderGotify is the builtin Gotify notification provider.
+	NotificationProviderGotify Provider = "gotify"
+
 	// NotificationProviderGeneric is the builtin Generic webhook notification provider.
 	NotificationProviderGeneric Provider = "generic"
 )

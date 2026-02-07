@@ -15,14 +15,18 @@ import (
 	"github.com/docker/docker/client"
 
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/arcaneupdater"
 	arcRegistry "github.com/getarcaneapp/arcane/backend/internal/utils/registry"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/containerregistry"
+	"github.com/getarcaneapp/arcane/types/event"
+	"github.com/getarcaneapp/arcane/types/project"
 	"github.com/getarcaneapp/arcane/types/updater"
 )
 
 type UpdaterService struct {
-	db                  *database.DB
+	imageUpdateStore    database.ImageUpdateStore
+	updaterStore        database.UpdaterStore
 	settingsService     *SettingsService
 	dockerService       *DockerClientService
 	projectService      *ProjectService
@@ -38,7 +42,8 @@ type UpdaterService struct {
 }
 
 func NewUpdaterService(
-	db *database.DB,
+	imageUpdateStore database.ImageUpdateStore,
+	updaterStore database.UpdaterStore,
 	settings *SettingsService,
 	docker *DockerClientService,
 	projects *ProjectService,
@@ -50,7 +55,8 @@ func NewUpdaterService(
 	upgrade *SystemUpgradeService,
 ) *UpdaterService {
 	return &UpdaterService{
-		db:                  db,
+		imageUpdateStore:    imageUpdateStore,
+		updaterStore:        updaterStore,
 		settingsService:     settings,
 		dockerService:       docker,
 		projectService:      projects,
@@ -70,8 +76,8 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 	start := time.Now()
 	out := &updater.Result{Items: []updater.ResourceResult{}}
 
-	var records []models.ImageUpdateRecord
-	if err := s.db.WithContext(ctx).Where("has_update = ?", true).Find(&records).Error; err != nil {
+	records, err := s.imageUpdateStore.ListImageUpdateRecordsWithUpdate(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("query pending image updates: %w", err)
 	}
 	// debug: how many pending records and dryRun flag
@@ -126,7 +132,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 	}
 
 	// Log run start
-	s.logAutoUpdate(ctx, models.EventSeverityInfo, models.JSON{
+	s.logAutoUpdate(ctx, event.EventSeverityInfo, base.JSON{
 		"phase":   "start",
 		"dryRun":  dryRun,
 		"planned": len(plans),
@@ -143,7 +149,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 	registryClient := arcRegistry.NewClient()
 	digestChecker := arcaneupdater.NewDigestChecker(dcli, registryClient)
 
-	enabledRegs := []models.ContainerRegistry{}
+	enabledRegs := []containerregistry.ModelContainerRegistry{}
 	if s.registryService != nil {
 		if regs, rerr := s.registryService.GetEnabledRegistries(ctx); rerr == nil {
 			enabledRegs = regs
@@ -171,7 +177,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 			out.Items = append(out.Items, item)
 			_ = s.recordRun(ctx, item)
 
-			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), models.JSON{
+			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), base.JSON{
 				"phase":    "image_pull",
 				"imageOld": p.oldRef,
 				"imageNew": p.newRef,
@@ -200,7 +206,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 			plans[i].oldIDs = nil
 			skipPull = true
 
-			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), models.JSON{
+			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), base.JSON{
 				"phase":         "image_pull",
 				"imageOld":      p.oldRef,
 				"imageNew":      p.newRef,
@@ -228,7 +234,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 					}
 				}
 			}
-			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), models.JSON{
+			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), base.JSON{
 				"phase":    "image_pull",
 				"imageOld": p.oldRef,
 				"imageNew": p.newRef,
@@ -284,7 +290,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 			}
 			_ = s.recordRun(ctx, item)
 
-			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), models.JSON{
+			s.logAutoUpdate(ctx, s.severityFromStatus(item.Status), base.JSON{
 				"phase":        "container",
 				"containerId":  r.ResourceID,
 				"container":    r.ResourceName,
@@ -322,7 +328,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 				continue
 			}
 			if err := s.clearImageUpdateRecord(ctx, repo, tag); err == nil {
-				s.logAutoUpdate(ctx, models.EventSeverityInfo, models.JSON{
+				s.logAutoUpdate(ctx, event.EventSeverityInfo, base.JSON{
 					"phase":    "record_clear",
 					"imageOld": p.oldRef,
 					"status":   "cleared",
@@ -338,7 +344,7 @@ func (s *UpdaterService) ApplyPending(ctx context.Context, dryRun bool) (*update
 	// Log run complete
 	duration := time.Since(start).String()
 	out.Duration = duration
-	s.logAutoUpdate(ctx, models.EventSeverityInfo, models.JSON{
+	s.logAutoUpdate(ctx, event.EventSeverityInfo, base.JSON{
 		"phase":    "complete",
 		"checked":  out.Checked,
 		"updated":  out.Updated,
@@ -591,7 +597,7 @@ func (s *UpdaterService) pruneImageIDs(ctx context.Context, ids []string) error 
 			continue
 		}
 
-		s.logAutoUpdate(ctx, models.EventSeverityInfo, models.JSON{
+		s.logAutoUpdate(ctx, event.EventSeverityInfo, base.JSON{
 			"phase":   "image_prune",
 			"imageId": id,
 			"status":  "removed",
@@ -620,13 +626,9 @@ func (s *UpdaterService) GetStatus() updater.Status {
 	}
 }
 
-func (s *UpdaterService) GetHistory(ctx context.Context, limit int) ([]models.AutoUpdateRecord, error) {
-	var rec []models.AutoUpdateRecord
-	q := s.db.WithContext(ctx).Order("start_time DESC")
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	if err := q.Find(&rec).Error; err != nil {
+func (s *UpdaterService) GetHistory(ctx context.Context, limit int) ([]updater.AutoUpdateRecord, error) {
+	rec, err := s.updaterStore.ListAutoUpdateRecords(ctx, limit)
+	if err != nil {
 		return nil, fmt.Errorf("get history: %w", err)
 	}
 	return rec, nil
@@ -669,14 +671,14 @@ func (s *UpdaterService) updateContainer(ctx context.Context, cnt container.Summ
 		slog.DebugContext(ctx, "updateContainer: stop failed", "containerId", cnt.ID, "err", err)
 		return fmt.Errorf("stop: %w", err)
 	}
-	_ = s.eventService.LogContainerEvent(ctx, models.EventTypeContainerStop, cnt.ID, name, systemUser.ID, systemUser.Username, "0", models.JSON{"action": "updater_stop"})
+	_ = s.eventService.LogContainerEvent(ctx, event.EventTypeContainerStop, cnt.ID, name, systemUser.ID, systemUser.Username, "0", base.JSON{"action": "updater_stop"})
 
 	// Remove the container
 	if err := dcli.ContainerRemove(ctx, cnt.ID, container.RemoveOptions{}); err != nil {
 		slog.DebugContext(ctx, "updateContainer: remove failed", "containerId", cnt.ID, "err", err)
 		return fmt.Errorf("remove: %w", err)
 	}
-	_ = s.eventService.LogContainerEvent(ctx, models.EventTypeContainerDelete, cnt.ID, name, systemUser.ID, systemUser.Username, "0", models.JSON{"action": "updater_delete"})
+	_ = s.eventService.LogContainerEvent(ctx, event.EventTypeContainerDelete, cnt.ID, name, systemUser.ID, systemUser.Username, "0", base.JSON{"action": "updater_delete"})
 
 	// recreate with new image ref
 	cfg := inspect.Config
@@ -711,15 +713,15 @@ func (s *UpdaterService) updateContainer(ctx context.Context, cnt container.Summ
 		slog.DebugContext(ctx, "updateContainer: create failed", "containerName", containerName, "err", err)
 		return fmt.Errorf("create: %w", err)
 	}
-	_ = s.eventService.LogContainerEvent(ctx, models.EventTypeContainerCreate, resp.ID, name, systemUser.ID, systemUser.Username, "0", models.JSON{"action": "updater_create", "newImageId": resp.ID})
+	_ = s.eventService.LogContainerEvent(ctx, event.EventTypeContainerCreate, resp.ID, name, systemUser.ID, systemUser.Username, "0", base.JSON{"action": "updater_create", "newImageId": resp.ID})
 
 	if err := dcli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		slog.DebugContext(ctx, "updateContainer: start failed", "newContainerId", resp.ID, "err", err)
 		return fmt.Errorf("start: %w", err)
 	}
-	_ = s.eventService.LogContainerEvent(ctx, models.EventTypeContainerStart, resp.ID, name, systemUser.ID, systemUser.Username, "0", models.JSON{"action": "updater_start"})
+	_ = s.eventService.LogContainerEvent(ctx, event.EventTypeContainerStart, resp.ID, name, systemUser.ID, systemUser.Username, "0", base.JSON{"action": "updater_start"})
 
-	_ = s.eventService.LogContainerEvent(ctx, models.EventTypeContainerUpdate, resp.ID, name, systemUser.ID, systemUser.Username, "0", models.JSON{
+	_ = s.eventService.LogContainerEvent(ctx, event.EventTypeContainerUpdate, resp.ID, name, systemUser.ID, systemUser.Username, "0", base.JSON{
 		"oldContainerId": cnt.ID,
 		"newContainerId": resp.ID,
 		"newImage":       newRef,
@@ -834,7 +836,7 @@ func (s *UpdaterService) collectUsedImagesFromProjects(ctx context.Context, out 
 
 	for _, p := range projs {
 		// consider running and partially running projects
-		if p.Status != models.ProjectStatusRunning && p.Status != models.ProjectStatusPartiallyRunning {
+		if p.Status != project.ProjectStatusRunning && p.Status != project.ProjectStatusPartiallyRunning {
 			continue
 		}
 
@@ -898,11 +900,11 @@ func (s *UpdaterService) getContainerName(cnt container.Summary) string {
 }
 
 func (s *UpdaterService) recordRun(ctx context.Context, item updater.ResourceResult) error {
-	rec := &models.AutoUpdateRecord{
+	rec := &updater.AutoUpdateRecord{
 		ResourceID:      item.ResourceID,
 		ResourceType:    item.ResourceType,
 		ResourceName:    item.ResourceName,
-		Status:          models.AutoUpdateStatus(item.Status),
+		Status:          updater.AutoUpdateStatus(item.Status),
 		StartTime:       time.Now(),
 		UpdateAvailable: item.Status == "updated" || item.Status == "update_available",
 		UpdateApplied:   item.UpdateApplied,
@@ -913,14 +915,14 @@ func (s *UpdaterService) recordRun(ctx context.Context, item updater.ResourceRes
 	}
 
 	if len(item.OldImages) > 0 {
-		old := make(models.JSON)
+		old := make(base.JSON)
 		for k, v := range item.OldImages {
 			old[k] = v
 		}
 		rec.OldImageVersions = old
 	}
 	if len(item.NewImages) > 0 {
-		newv := make(models.JSON)
+		newv := make(base.JSON)
 		for k, v := range item.NewImages {
 			newv[k] = v
 		}
@@ -930,7 +932,7 @@ func (s *UpdaterService) recordRun(ctx context.Context, item updater.ResourceRes
 	end := time.Now()
 	rec.EndTime = &end
 
-	return s.db.WithContext(ctx).Create(rec).Error
+	return s.updaterStore.CreateAutoUpdateRecord(ctx, *rec)
 }
 
 // Resolve the local image ID(s) currently referenced by ref (repo:tag) before we pull.
@@ -1181,7 +1183,7 @@ func (s *UpdaterService) parseNormalizedRef(ref string) (host, repository, tag s
 	return host, repository, tag
 }
 
-func (s *UpdaterService) logAutoUpdate(ctx context.Context, sev models.EventSeverity, metadata models.JSON) {
+func (s *UpdaterService) logAutoUpdate(ctx context.Context, sev event.EventSeverity, metadata base.JSON) {
 	phase, _ := metadata["phase"].(string)
 
 	title := "Auto-update"
@@ -1234,7 +1236,7 @@ func (s *UpdaterService) logAutoUpdate(ctx context.Context, sev models.EventSeve
 	environmentID := "0"
 
 	_, _ = s.eventService.CreateEvent(ctx, CreateEventRequest{
-		Type:          models.EventTypeSystemAutoUpdate,
+		Type:          event.EventTypeSystemAutoUpdate,
 		Severity:      sev,
 		Title:         title,
 		ResourceType:  &resourceType,
@@ -1244,14 +1246,14 @@ func (s *UpdaterService) logAutoUpdate(ctx context.Context, sev models.EventSeve
 	})
 }
 
-func (s *UpdaterService) severityFromStatus(status string) models.EventSeverity {
+func (s *UpdaterService) severityFromStatus(status string) event.EventSeverity {
 	switch status {
 	case "failed":
-		return models.EventSeverityError
+		return event.EventSeverityError
 	case "updated":
-		return models.EventSeveritySuccess
+		return event.EventSeveritySuccess
 	default:
-		return models.EventSeverityInfo
+		return event.EventSeverityInfo
 	}
 }
 
@@ -1292,10 +1294,7 @@ func (s *UpdaterService) anyImageIDsStillInUse(ctx context.Context, ids []string
 }
 
 func (s *UpdaterService) clearImageUpdateRecord(ctx context.Context, repository, tag string) error {
-	return s.db.WithContext(ctx).
-		Model(&models.ImageUpdateRecord{}).
-		Where("repository = ? AND tag = ?", repository, tag).
-		Update("has_update", false).Error
+	return s.imageUpdateStore.UpdateImageUpdateHasUpdateByRepositoryTag(ctx, repository, tag, false)
 }
 
 // parseRepoAndTag extracts repository and tag from a reference like "registry/repo:tag".

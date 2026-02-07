@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	"github.com/nicholas-fedor/shoutrrr/pkg/services/chat/slack"
 )
 
 // BuildSlackURL converts SlackConfig to Shoutrrr URL format using shoutrrr's Config
-func BuildSlackURL(config models.SlackConfig) (string, error) {
+func BuildSlackURL(config notification.SlackConfig) (string, error) {
 	if config.Token == "" {
 		return "", fmt.Errorf("slack token is required")
 	}
@@ -36,7 +36,7 @@ func BuildSlackURL(config models.SlackConfig) (string, error) {
 }
 
 // SendSlack sends a message via Shoutrrr Slack using proper service configuration
-func SendSlack(ctx context.Context, config models.SlackConfig, message string) error {
+func SendSlack(ctx context.Context, config notification.SlackConfig, message string) error {
 	if config.Token == "" {
 		return fmt.Errorf("slack token is empty")
 	}

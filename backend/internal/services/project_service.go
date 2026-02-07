@@ -18,7 +18,6 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/docker"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/fs"
@@ -27,22 +26,25 @@ import (
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pathmapper"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/timeouts"
 	"github.com/getarcaneapp/arcane/backend/pkg/projects"
+	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/containerregistry"
+	"github.com/getarcaneapp/arcane/types/event"
 	"github.com/getarcaneapp/arcane/types/project"
-	"gorm.io/gorm"
+	"github.com/getarcaneapp/arcane/types/user"
+	"github.com/google/uuid"
 )
 
 type ProjectService struct {
-	db              *database.DB
+	store           database.Store
 	settingsService *SettingsService
 	eventService    *EventService
 	imageService    *ImageService
 	dockerService   *DockerClientService
 }
 
-func NewProjectService(db *database.DB, settingsService *SettingsService, eventService *EventService, imageService *ImageService, dockerService *DockerClientService) *ProjectService {
+func NewProjectService(store database.Store, settingsService *SettingsService, eventService *EventService, imageService *ImageService, dockerService *DockerClientService) *ProjectService {
 	return &ProjectService{
-		db:              db,
+		store:           store,
 		settingsService: settingsService,
 		eventService:    eventService,
 		imageService:    imageService,
@@ -125,18 +127,28 @@ func normalizeComposeProjectName(name string) string {
 	return normalized
 }
 
-func (s *ProjectService) GetProjectFromDatabaseByID(ctx context.Context, id string) (*models.Project, error) {
-	var project models.Project
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&project).Error; err != nil {
+func compareInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func (s *ProjectService) GetProjectFromDatabaseByID(ctx context.Context, id string) (*project.Project, error) {
+	project, err := s.store.GetProjectByID(ctx, id)
+	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("request canceled or timed out")
 		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("project not found")
-		}
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
-	return &project, nil
+	if project == nil {
+		return nil, fmt.Errorf("project not found")
+	}
+	return project, nil
 }
 
 func (s *ProjectService) getServiceCounts(services []ProjectServiceInfo) (total int, running int) {
@@ -150,7 +162,7 @@ func (s *ProjectService) getServiceCounts(services []ProjectServiceInfo) (total 
 	return total, running
 }
 
-func (s *ProjectService) updateProjectStatusandCountsInternal(ctx context.Context, projectID string, status models.ProjectStatus) error {
+func (s *ProjectService) updateProjectStatusandCountsInternal(ctx context.Context, projectID string, status project.ProjectStatus) error {
 	services, err := s.GetProjectServices(ctx, projectID)
 	if err != nil {
 		slog.Error("GetProjectServices failed during status update", "projectID", projectID, "error", err)
@@ -159,27 +171,16 @@ func (s *ProjectService) updateProjectStatusandCountsInternal(ctx context.Contex
 
 	serviceCount, runningCount := s.getServiceCounts(services)
 
-	if err := s.db.WithContext(ctx).Model(&models.Project{}).Where("id = ?", projectID).Updates(map[string]interface{}{
-		"status":        status,
-		"service_count": serviceCount,
-		"running_count": runningCount,
-		"updated_at":    time.Now(),
-	}).Error; err != nil {
+	if err := s.store.UpdateProjectStatusAndCounts(ctx, projectID, status, serviceCount, runningCount, time.Now()); err != nil {
 		return fmt.Errorf("failed to update project status and counts: %w", err)
 	}
 
 	return nil
 }
 
-func (s *ProjectService) updateProjectStatusInternal(ctx context.Context, id string, status models.ProjectStatus) error {
-	now := time.Now()
-	res := s.db.WithContext(ctx).Model(&models.Project{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":     status,
-		"updated_at": now,
-	})
-
-	if res.Error != nil {
-		return fmt.Errorf("failed to update project status: %w", res.Error)
+func (s *ProjectService) updateProjectStatusInternal(ctx context.Context, id string, status project.ProjectStatus) error {
+	if err := s.store.UpdateProjectStatus(ctx, id, status, time.Now()); err != nil {
+		return fmt.Errorf("failed to update project status: %w", err)
 	}
 
 	return nil
@@ -371,19 +372,20 @@ func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath
 	}
 }
 
-func (s *ProjectService) enrichWithGitOpsInfo(ctx context.Context, proj *models.Project, resp *project.Details) {
+func (s *ProjectService) enrichWithGitOpsInfo(ctx context.Context, proj *project.Project, resp *project.Details) {
 	if proj.GitOpsManagedBy != nil {
-		var sync models.GitOpsSync
-		if err := s.db.WithContext(ctx).Preload("Repository").Where("id = ?", *proj.GitOpsManagedBy).First(&sync).Error; err == nil {
+		sync, err := s.store.GetGitOpsSyncByID(ctx, *proj.GitOpsManagedBy)
+		if err == nil && sync != nil {
 			resp.LastSyncCommit = sync.LastSyncCommit
-			if sync.Repository != nil {
-				resp.GitRepositoryURL = sync.Repository.URL
+			repo, repoErr := s.store.GetGitRepositoryByID(ctx, sync.RepositoryID)
+			if repoErr == nil && repo != nil {
+				resp.GitRepositoryURL = repo.URL
 			}
 		}
 	}
 }
 
-func (s *ProjectService) enrichWithComposeServiceConfigs(ctx context.Context, proj *models.Project, composeFile string, resp *project.Details) {
+func (s *ProjectService) enrichWithComposeServiceConfigs(ctx context.Context, proj *project.Project, composeFile string, resp *project.Details) {
 	projectsDirSetting := s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects")
 	projectsDirectory, _ := fs.GetProjectsDirectory(ctx, strings.TrimSpace(projectsDirSetting))
 
@@ -447,19 +449,23 @@ func (s *ProjectService) SyncProjectsFromFileSystem(ctx context.Context) error {
 }
 
 func (s *ProjectService) upsertProjectForDir(ctx context.Context, dirName, dirPath string) error {
-	var existing models.Project
-	err := s.db.WithContext(ctx).
-		Where("path = ? OR dir_name = ?", dirPath, dirName).
-		First(&existing).Error
+	existing, err := s.store.GetProjectByPathOrDir(ctx, dirPath, dirName)
+	if err != nil {
+		return fmt.Errorf("query existing project for %q failed: %w", dirPath, err)
+	}
 
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if existing == nil {
 		// Create a minimal project entry
 		reason := "Project discovered from filesystem, status pending Docker service query"
-		proj := &models.Project{
+		proj := &project.Project{
+			BaseModel: base.BaseModel{
+				ID:        uuid.NewString(),
+				CreatedAt: time.Now(),
+			},
 			Name:         dirName,
 			DirName:      &dirName,
 			Path:         dirPath,
-			Status:       models.ProjectStatusUnknown,
+			Status:       project.ProjectStatusUnknown,
 			StatusReason: &reason,
 			ServiceCount: 0,
 			RunningCount: 0,
@@ -468,39 +474,36 @@ func (s *ProjectService) upsertProjectForDir(ctx context.Context, dirName, dirPa
 			"project", dirName,
 			"path", dirPath,
 			"reason", reason)
-		if cerr := s.db.WithContext(ctx).Create(proj).Error; cerr != nil {
+		if _, cerr := s.store.CreateProject(ctx, *proj); cerr != nil {
 			return fmt.Errorf("create project for %q failed: %w", dirPath, cerr)
 		}
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("query existing project for %q failed: %w", dirPath, err)
-	}
 
-	updates := map[string]interface{}{}
+	dirty := false
 	if existing.Path != dirPath {
-		updates["path"] = dirPath
+		existing.Path = dirPath
+		dirty = true
 	}
 	if existing.DirName == nil || *existing.DirName != dirName {
-		updates["dir_name"] = dirName
+		existing.DirName = &dirName
+		dirty = true
 	}
-	if len(updates) == 0 {
+	if !dirty {
 		return nil
 	}
 
-	updates["updated_at"] = time.Now()
-	if uerr := s.db.WithContext(ctx).
-		Model(&models.Project{}).
-		Where("id = ?", existing.ID).
-		Updates(updates).Error; uerr != nil {
+	now := time.Now()
+	existing.UpdatedAt = &now
+	if _, uerr := s.store.SaveProject(ctx, *existing); uerr != nil {
 		return fmt.Errorf("update project %s failed: %w", existing.ID, uerr)
 	}
 	return nil
 }
 
 func (s *ProjectService) cleanupDBProjects(ctx context.Context, seen map[string]struct{}) error {
-	var all []models.Project
-	if err := s.db.WithContext(ctx).Find(&all).Error; err != nil {
+	all, err := s.store.ListProjects(ctx)
+	if err != nil {
 		return fmt.Errorf("list projects for cleanup failed: %w", err)
 	}
 
@@ -513,7 +516,7 @@ func (s *ProjectService) cleanupDBProjects(ctx context.Context, seen map[string]
 		// Remove if path missing or compose file missing
 		if _, err := os.Stat(p.Path); err != nil {
 			if os.IsNotExist(err) {
-				if derr := s.db.WithContext(ctx).Delete(&models.Project{}, "id = ?", p.ID).Error; derr != nil {
+				if _, derr := s.store.DeleteProjectByID(ctx, p.ID); derr != nil {
 					slog.WarnContext(ctx, "failed to delete missing-path project", "projectID", p.ID, "error", derr)
 				}
 				continue
@@ -524,7 +527,7 @@ func (s *ProjectService) cleanupDBProjects(ctx context.Context, seen map[string]
 		}
 
 		if _, err := projects.DetectComposeFile(p.Path); err != nil {
-			if derr := s.db.WithContext(ctx).Delete(&models.Project{}, "id = ?", p.ID).Error; derr != nil {
+			if _, derr := s.store.DeleteProjectByID(ctx, p.ID); derr != nil {
 				slog.WarnContext(ctx, "failed to delete project without compose", "projectID", p.ID, "error", derr)
 			}
 		}
@@ -532,9 +535,9 @@ func (s *ProjectService) cleanupDBProjects(ctx context.Context, seen map[string]
 	return nil
 }
 
-func (s *ProjectService) ListAllProjects(ctx context.Context) ([]models.Project, error) {
-	var items []models.Project
-	if err := s.db.WithContext(ctx).Find(&items).Error; err != nil {
+func (s *ProjectService) ListAllProjects(ctx context.Context) ([]project.Project, error) {
+	items, err := s.store.ListProjects(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
 	return items, nil
@@ -602,13 +605,13 @@ func (s *ProjectService) countProjectFolders(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *ProjectService) incrementStatusCounts(status models.ProjectStatus, running, stopped *int) {
+func (s *ProjectService) incrementStatusCounts(status project.ProjectStatus, running, stopped *int) {
 	switch status {
-	case models.ProjectStatusRunning, models.ProjectStatusPartiallyRunning, models.ProjectStatusDeploying, models.ProjectStatusRestarting:
+	case project.ProjectStatusRunning, project.ProjectStatusPartiallyRunning, project.ProjectStatusDeploying, project.ProjectStatusRestarting:
 		*running++
-	case models.ProjectStatusStopped, models.ProjectStatusStopping:
+	case project.ProjectStatusStopped, project.ProjectStatusStopping:
 		*stopped++
-	case models.ProjectStatusUnknown:
+	case project.ProjectStatusUnknown:
 		// Don't count unknown
 	}
 }
@@ -616,8 +619,8 @@ func (s *ProjectService) incrementStatusCounts(status models.ProjectStatus, runn
 func (s *ProjectService) GetProjectStatusCounts(ctx context.Context) (folderCount, runningProjects, stoppedProjects, totalProjects int, err error) {
 	folderCount, _ = s.countProjectFolders(ctx)
 
-	var projectsList []models.Project
-	if err := s.db.WithContext(ctx).Find(&projectsList).Error; err != nil {
+	projectsList, err := s.store.ListProjects(ctx)
+	if err != nil {
 		return folderCount, 0, 0, 0, fmt.Errorf("failed to list projects: %w", err)
 	}
 
@@ -658,9 +661,9 @@ func (s *ProjectService) GetProjectStatusCounts(ctx context.Context) (folderCoun
 			})
 		}
 
-		var status models.ProjectStatus
+		var status project.ProjectStatus
 		if len(services) == 0 {
-			status = models.ProjectStatusStopped
+			status = project.ProjectStatusStopped
 		} else {
 			// We have containers, calculate status based on their state
 			// Note: calculateProjectStatus doesn't know about "missing" services (ServiceCount)
@@ -682,8 +685,8 @@ func (s *ProjectService) GetProjectStatusCounts(ctx context.Context) (folderCoun
 			st := s.calculateProjectStatus(services)
 
 			// Refine: if all containers are running, but we have fewer containers than defined services
-			if st == models.ProjectStatusRunning && len(services) < p.ServiceCount {
-				st = models.ProjectStatusPartiallyRunning
+			if st == project.ProjectStatusRunning && len(services) < p.ServiceCount {
+				st = project.ProjectStatusPartiallyRunning
 			}
 			status = st
 		}
@@ -698,7 +701,7 @@ func (s *ProjectService) GetProjectStatusCounts(ctx context.Context) (folderCoun
 
 // Project Actions
 
-func (s *ProjectService) DeployProject(ctx context.Context, projectID string, user models.User) error {
+func (s *ProjectService) DeployProject(ctx context.Context, projectID string, user user.ModelUser) error {
 	projectFromDb, err := s.GetProjectFromDatabaseByID(ctx, projectID)
 	if err != nil {
 		return fmt.Errorf("failed to get project: %w", err)
@@ -723,12 +726,12 @@ func (s *ProjectService) DeployProject(ctx context.Context, projectID string, us
 	}
 
 	autoInjectEnv := s.settingsService.GetBoolSetting(ctx, "autoInjectEnv", false)
-	project, loadErr := projects.LoadComposeProject(ctx, composeFileFullPath, normalizeComposeProjectName(projectFromDb.Name), projectsDirectory, autoInjectEnv, pathMapper)
+	composeProj, loadErr := projects.LoadComposeProject(ctx, composeFileFullPath, normalizeComposeProjectName(projectFromDb.Name), projectsDirectory, autoInjectEnv, pathMapper)
 	if loadErr != nil {
 		return fmt.Errorf("failed to load compose project from %s: %w", projectFromDb.Path, loadErr)
 	}
 
-	if err := s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusDeploying); err != nil {
+	if err := s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusDeploying); err != nil {
 		return fmt.Errorf("failed to update project status to deploying: %w", err)
 	}
 
@@ -738,14 +741,14 @@ func (s *ProjectService) DeployProject(ctx context.Context, projectID string, us
 
 	removeOrphans := projectFromDb.GitOpsManagedBy != nil && *projectFromDb.GitOpsManagedBy != ""
 
-	slog.Info("starting compose up with health check support", "projectID", projectID, "projectName", project.Name, "services", len(project.Services), "removeOrphans", removeOrphans)
+	slog.Info("starting compose up with health check support", "projectID", projectID, "projectName", composeProj.Name, "services", len(composeProj.Services), "removeOrphans", removeOrphans)
 	// Health/progress streaming (if any) is handled inside projects.ComposeUp via ctx.
-	if err := projects.ComposeUp(ctx, project, nil, removeOrphans); err != nil {
-		slog.Error("compose up failed", "projectName", project.Name, "projectID", projectID, "error", err)
+	if err := projects.ComposeUp(ctx, composeProj, nil, removeOrphans); err != nil {
+		slog.Error("compose up failed", "projectName", composeProj.Name, "projectID", projectID, "error", err)
 		if containers, psErr := s.GetProjectServices(ctx, projectID); psErr == nil {
 			slog.Info("containers after failed deploy", "projectID", projectID, "containers", containers)
 		}
-		_ = s.updateProjectStatusandCountsInternal(ctx, projectID, models.ProjectStatusStopped)
+		_ = s.updateProjectStatusandCountsInternal(ctx, projectID, project.ProjectStatusStopped)
 
 		// Provide more helpful error messages
 		errMsg := err.Error()
@@ -754,21 +757,21 @@ func (s *ProjectService) DeployProject(ctx context.Context, projectID string, us
 		}
 		return fmt.Errorf("failed to deploy project: %w", err)
 	}
-	slog.Info("compose up completed successfully", "projectID", projectID, "projectName", project.Name)
+	slog.Info("compose up completed successfully", "projectID", projectID, "projectName", composeProj.Name)
 
-	metadata := models.JSON{"action": "deploy", "projectID": projectID, "projectName": project.Name}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectDeploy, projectID, project.Name, user.ID, user.Username, "0", metadata); logErr != nil {
+	metadata := base.JSON{"action": "deploy", "projectID": projectID, "projectName": composeProj.Name}
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectDeploy, projectID, composeProj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project deployment action", "error", logErr)
 	}
 
-	err = s.updateProjectStatusandCountsInternal(ctx, projectID, models.ProjectStatusRunning)
+	err = s.updateProjectStatusandCountsInternal(ctx, projectID, project.ProjectStatusRunning)
 	if err != nil {
 		slog.Error("failed to update project status and counts after deploy", "projectID", projectID, "error", err)
 	}
 	return err
 }
 
-func (s *ProjectService) DownProject(ctx context.Context, projectID string, user models.User) error {
+func (s *ProjectService) DownProject(ctx context.Context, projectID string, user user.ModelUser) error {
 	projectFromDb, err := s.GetProjectFromDatabaseByID(ctx, projectID)
 	if err != nil {
 		return err
@@ -790,32 +793,32 @@ func (s *ProjectService) DownProject(ctx context.Context, projectID string, user
 	autoInjectEnv := s.settingsService.GetBoolSetting(ctx, "autoInjectEnv", false)
 	proj, _, lerr := projects.LoadComposeProjectFromDir(ctx, projectFromDb.Path, normalizeComposeProjectName(projectFromDb.Name), projectsDirectory, autoInjectEnv, pathMapper)
 	if lerr != nil {
-		_ = s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusRunning)
+		_ = s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusRunning)
 		return fmt.Errorf("failed to load compose project: %w", lerr)
 	}
 
-	if err := s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusStopped); err != nil {
+	if err := s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusStopped); err != nil {
 		return fmt.Errorf("failed to update project status to stopping: %w", err)
 	}
 
 	if err := projects.ComposeDown(ctx, proj, false); err != nil {
-		_ = s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusRunning)
+		_ = s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusRunning)
 		return fmt.Errorf("failed to bring down project: %w", err)
 	}
 
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action":      "down",
 		"projectID":   projectID,
 		"projectName": projectFromDb.Name,
 	}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectStop, projectID, projectFromDb.Name, user.ID, user.Username, "0", metadata); logErr != nil {
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectStop, projectID, projectFromDb.Name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project down action", "error", logErr)
 	}
 
-	return s.updateProjectStatusandCountsInternal(ctx, projectID, models.ProjectStatusStopped)
+	return s.updateProjectStatusandCountsInternal(ctx, projectID, project.ProjectStatusStopped)
 }
 
-func (s *ProjectService) CreateProject(ctx context.Context, name, composeContent string, envContent *string, user models.User) (*models.Project, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, name, composeContent string, envContent *string, user user.ModelUser) (*project.Project, error) {
 	sanitized := fs.SanitizeProjectName(name)
 
 	projectsDirectory, err := fs.GetProjectsDirectory(ctx, s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects"))
@@ -829,34 +832,44 @@ func (s *ProjectService) CreateProject(ctx context.Context, name, composeContent
 		return nil, fmt.Errorf("failed to create project directory: %w", err)
 	}
 
-	proj := &models.Project{
+	proj := &project.Project{
+		BaseModel: base.BaseModel{
+			ID:        uuid.NewString(),
+			CreatedAt: time.Now(),
+		},
 		Name:         name,
 		DirName:      &folderName,
 		Path:         projectPath,
-		Status:       models.ProjectStatusStopped,
+		Status:       project.ProjectStatusStopped,
 		ServiceCount: 0,
 		RunningCount: 0,
 	}
+	proj.UpdatedAt = &proj.CreatedAt
 
-	if err := s.db.WithContext(ctx).Create(proj).Error; err != nil {
+	created, err := s.store.CreateProject(ctx, *proj)
+	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
+	if created == nil {
+		return nil, fmt.Errorf("failed to create project")
+	}
+	proj = created
 
 	if err := fs.SaveOrUpdateProjectFiles(projectsDirectory, projectPath, composeContent, envContent); err != nil {
 		// Best-effort cleanup to restore pre-transaction behavior.
-		_ = s.db.WithContext(ctx).Delete(proj).Error
+		_, _ = s.store.DeleteProjectByID(ctx, proj.ID)
 		return nil, fmt.Errorf("failed to save project files: %w", err)
 	}
 
-	metadata := models.JSON{"action": "create", "projectID": proj.ID, "projectName": name, "path": projectPath}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectCreate, proj.ID, name, user.ID, user.Username, "0", metadata); logErr != nil {
+	metadata := base.JSON{"action": "create", "projectID": proj.ID, "projectName": name, "path": projectPath}
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectCreate, proj.ID, name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project creation", "error", logErr)
 	}
 
 	return proj, nil
 }
 
-func (s *ProjectService) DestroyProject(ctx context.Context, projectID string, removeFiles, removeVolumes bool, user models.User) error {
+func (s *ProjectService) DestroyProject(ctx context.Context, projectID string, removeFiles, removeVolumes bool, user user.ModelUser) error {
 	slog.DebugContext(ctx, "DestroyProject service called",
 		"projectID", projectID,
 		"removeFiles", removeFiles,
@@ -912,19 +925,21 @@ func (s *ProjectService) DestroyProject(ctx context.Context, projectID string, r
 		slog.DebugContext(ctx, "Skipping file removal (removeFiles=false)", "path", proj.Path)
 	}
 
-	if err := s.db.WithContext(ctx).Delete(proj).Error; err != nil {
+	if deleted, err := s.store.DeleteProjectByID(ctx, proj.ID); err != nil {
 		return fmt.Errorf("failed to delete project from database: %w", err)
+	} else if !deleted {
+		return fmt.Errorf("project not found")
 	}
 
-	metadata := models.JSON{"action": "destroy", "projectID": projectID, "projectName": proj.Name, "removeFiles": removeFiles, "removeVolumes": removeVolumes}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectDelete, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
+	metadata := base.JSON{"action": "destroy", "projectID": projectID, "projectName": proj.Name, "removeFiles": removeFiles, "removeVolumes": removeVolumes}
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectDelete, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project destroy action", "error", logErr)
 	}
 
 	return nil
 }
 
-func (s *ProjectService) RedeployProject(ctx context.Context, projectID string, user models.User) error {
+func (s *ProjectService) RedeployProject(ctx context.Context, projectID string, user user.ModelUser) error {
 	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
 	if err != nil {
 		return err
@@ -934,8 +949,8 @@ func (s *ProjectService) RedeployProject(ctx context.Context, projectID string, 
 		slog.WarnContext(ctx, "failed to pull project images", "error", err)
 	}
 
-	metadata := models.JSON{"action": "redeploy", "projectID": projectID, "projectName": proj.Name}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectDeploy, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
+	metadata := base.JSON{"action": "redeploy", "projectID": projectID, "projectName": proj.Name}
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectDeploy, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project redeploy action", "error", logErr)
 	}
 
@@ -1063,13 +1078,13 @@ func (s *ProjectService) EnsureProjectImagesPresent(ctx context.Context, project
 	return nil
 }
 
-func (s *ProjectService) RestartProject(ctx context.Context, projectID string, user models.User) error {
+func (s *ProjectService) RestartProject(ctx context.Context, projectID string, user user.ModelUser) error {
 	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
 	if err != nil {
 		return err
 	}
 
-	if err := s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusRestarting); err != nil {
+	if err := s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusRestarting); err != nil {
 		return fmt.Errorf("failed to update project status to restarting: %w", err)
 	}
 
@@ -1089,34 +1104,34 @@ func (s *ProjectService) RestartProject(ctx context.Context, projectID string, u
 	autoInjectEnv := s.settingsService.GetBoolSetting(ctx, "autoInjectEnv", false)
 	compProj, _, lerr := projects.LoadComposeProjectFromDir(ctx, proj.Path, normalizeComposeProjectName(proj.Name), projectsDirectory, autoInjectEnv, pathMapper)
 	if lerr != nil {
-		_ = s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusRunning)
+		_ = s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusRunning)
 		return fmt.Errorf("failed to load compose project: %w", lerr)
 	}
 
 	if err := projects.ComposeRestart(ctx, compProj, nil); err != nil {
-		_ = s.updateProjectStatusInternal(ctx, projectID, models.ProjectStatusRunning)
+		_ = s.updateProjectStatusInternal(ctx, projectID, project.ProjectStatusRunning)
 		return fmt.Errorf("failed to restart project: %w", err)
 	}
 
-	metadata := models.JSON{
+	metadata := base.JSON{
 		"action":      "restart",
 		"projectID":   projectID,
 		"projectName": proj.Name,
 	}
-	if logErr := s.eventService.LogProjectEvent(ctx, models.EventTypeProjectStart, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
+	if logErr := s.eventService.LogProjectEvent(ctx, event.EventTypeProjectStart, projectID, proj.Name, user.ID, user.Username, "0", metadata); logErr != nil {
 		slog.ErrorContext(ctx, "could not log project restart action", "error", logErr)
 	}
 
-	return s.updateProjectStatusandCountsInternal(ctx, projectID, models.ProjectStatusRunning)
+	return s.updateProjectStatusandCountsInternal(ctx, projectID, project.ProjectStatusRunning)
 }
 
-func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, name *string, composeContent, envContent *string) (*models.Project, error) {
-	var proj models.Project
-	if err := s.db.WithContext(ctx).First(&proj, "id = ?", projectID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("project not found")
-		}
+func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, name *string, composeContent, envContent *string) (*project.Project, error) {
+	proj, err := s.store.GetProjectByID(ctx, projectID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get project: %w", err)
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project not found")
 	}
 
 	// Get projects directory for security validation
@@ -1125,7 +1140,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, na
 		return nil, fmt.Errorf("failed to get projects directory: %w", err)
 	}
 	// Ensure the project's path is under the projects root (repair legacy relative paths)
-	if err := s.ensureProjectPathUnderRoot(ctx, &proj, false); err != nil {
+	if err := s.ensureProjectPathUnderRoot(ctx, proj, false); err != nil {
 		return nil, err
 	}
 
@@ -1146,12 +1161,18 @@ func (s *ProjectService) UpdateProject(ctx context.Context, projectID string, na
 		}
 	}
 
-	if err := s.db.WithContext(ctx).Save(&proj).Error; err != nil {
+	now := time.Now()
+	proj.UpdatedAt = &now
+	saved, err := s.store.SaveProject(ctx, *proj)
+	if err != nil {
 		return nil, fmt.Errorf("failed to update project: %w", err)
 	}
+	if saved == nil {
+		return nil, fmt.Errorf("project not found")
+	}
 
-	slog.InfoContext(ctx, "project updated", "projectID", proj.ID, "name", proj.Name)
-	return &proj, nil
+	slog.InfoContext(ctx, "project updated", "projectID", saved.ID, "name", saved.Name)
+	return saved, nil
 }
 
 func (s *ProjectService) UpdateProjectIncludeFile(ctx context.Context, projectID, relativePath, content string) error {
@@ -1176,7 +1197,7 @@ func (s *ProjectService) UpdateProjectIncludeFile(ctx context.Context, projectID
 // ensureProjectPathUnderRoot validates that the project's path is a safe subdirectory of the configured projects root.
 // If not, it normalizes the path to `<projectsRoot>/<dirName or sanitized project name>`. When persist=true, it saves
 // the updated project path to the database.
-func (s *ProjectService) ensureProjectPathUnderRoot(ctx context.Context, proj *models.Project, persist bool) error {
+func (s *ProjectService) ensureProjectPathUnderRoot(ctx context.Context, proj *project.Project, persist bool) error {
 	projectsDirectory, err := fs.GetProjectsDirectory(ctx, s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects"))
 	if err != nil {
 		return fmt.Errorf("failed to get projects directory: %w", err)
@@ -1205,7 +1226,9 @@ func (s *ProjectService) ensureProjectPathUnderRoot(ctx context.Context, proj *m
 	proj.Path = filepath.Clean(candidate)
 
 	if persist {
-		if saveErr := s.db.WithContext(ctx).Save(proj).Error; saveErr != nil {
+		now := time.Now()
+		proj.UpdatedAt = &now
+		if _, saveErr := s.store.SaveProject(ctx, *proj); saveErr != nil {
 			slog.WarnContext(ctx, "failed to persist normalized project path", "error", saveErr)
 		}
 	}
@@ -1263,60 +1286,79 @@ func (s *ProjectService) StreamProjectLogs(ctx context.Context, projectID string
 // Table Functions
 
 func (s *ProjectService) ListProjects(ctx context.Context, params pagination.QueryParams) ([]project.Details, pagination.Response, error) {
-	query := s.db.WithContext(ctx).Model(&models.Project{})
+	projectsArray, err := s.store.ListProjects(ctx)
+	if err != nil {
+		return nil, pagination.Response{}, fmt.Errorf("failed to list projects: %w", err)
+	}
+
 	statusFilter := ""
 	if params.Filters != nil {
 		statusFilter = strings.TrimSpace(params.Filters["status"])
 	}
 	if statusFilter != "" {
-		return s.listProjectsByStatus(ctx, params, query)
+		return s.listProjectsByStatus(ctx, params, projectsArray)
 	}
 
-	if term := strings.TrimSpace(params.Search); term != "" {
-		searchPattern := "%" + term + "%"
-		query = query.Where(
-			"name LIKE ? OR path LIKE ? OR status LIKE ? OR COALESCE(dir_name, '') LIKE ?",
-			searchPattern, searchPattern, searchPattern, searchPattern,
-		)
+	if params.Limit <= 0 {
+		params.Limit = 20
+	} else if params.Limit > 100 {
+		params.Limit = 100
+	}
+	if params.Start < 0 {
+		params.Start = 0
 	}
 
-	query = pagination.ApplyFilter(query, "status", params.Filters["status"])
-
-	var projectsArray []models.Project
-	paginationResp, err := pagination.PaginateAndSortDB(params, query, &projectsArray)
-	if err != nil {
-		return nil, pagination.Response{}, fmt.Errorf("failed to paginate projects: %w", err)
+	config := pagination.Config[project.Project]{
+		SearchAccessors: []pagination.SearchAccessor[project.Project]{
+			func(p project.Project) (string, error) { return p.Name, nil },
+			func(p project.Project) (string, error) { return p.Path, nil },
+			func(p project.Project) (string, error) { return string(p.Status), nil },
+			func(p project.Project) (string, error) { return utils.DerefString(p.DirName), nil },
+		},
+		SortBindings: []pagination.SortBinding[project.Project]{
+			{Key: "name", Fn: func(a, b project.Project) int { return strings.Compare(a.Name, b.Name) }},
+			{Key: "status", Fn: func(a, b project.Project) int { return strings.Compare(string(a.Status), string(b.Status)) }},
+			{Key: "serviceCount", Fn: func(a, b project.Project) int { return compareInt(a.ServiceCount, b.ServiceCount) }},
+			{Key: "service_count", Fn: func(a, b project.Project) int { return compareInt(a.ServiceCount, b.ServiceCount) }},
+			{Key: "runningCount", Fn: func(a, b project.Project) int { return compareInt(a.RunningCount, b.RunningCount) }},
+			{Key: "running_count", Fn: func(a, b project.Project) int { return compareInt(a.RunningCount, b.RunningCount) }},
+			{Key: "createdAt", Fn: func(a, b project.Project) int { return compareTime(a.CreatedAt, b.CreatedAt) }},
+			{Key: "created_at", Fn: func(a, b project.Project) int { return compareTime(a.CreatedAt, b.CreatedAt) }},
+			{Key: "updatedAt", Fn: func(a, b project.Project) int { return compareOptionalTime(a.UpdatedAt, b.UpdatedAt) }},
+			{Key: "updated_at", Fn: func(a, b project.Project) int { return compareOptionalTime(a.UpdatedAt, b.UpdatedAt) }},
+		},
+		FilterAccessors: []pagination.FilterAccessor[project.Project]{
+			{
+				Key: "status",
+				Fn: func(p project.Project, filterValue string) bool {
+					for _, token := range strings.Split(filterValue, ",") {
+						if strings.EqualFold(strings.TrimSpace(string(p.Status)), strings.TrimSpace(token)) {
+							return true
+						}
+					}
+					return false
+				},
+			},
+		},
 	}
 
-	slog.DebugContext(ctx, "Retrieved projects from database",
-		"count", len(projectsArray))
+	result := pagination.SearchOrderAndPaginate(projectsArray, params, config)
+	paginationResp := pagination.BuildResponseFromFilterResult(result, params)
 
 	// Fetch live status concurrently for all projects
-	result := s.fetchProjectStatusConcurrently(ctx, projectsArray)
+	items := s.fetchProjectStatusConcurrently(ctx, result.Items)
 
 	slog.DebugContext(ctx, "Completed ListProjects request",
-		"result_count", len(result))
+		"result_count", len(items))
 
-	return result, paginationResp, nil
+	return items, paginationResp, nil
 }
 
 func (s *ProjectService) listProjectsByStatus(
 	ctx context.Context,
 	params pagination.QueryParams,
-	query *gorm.DB,
+	projectsArray []project.Project,
 ) ([]project.Details, pagination.Response, error) {
-	var projectsArray []models.Project
-	if term := strings.TrimSpace(params.Search); term != "" {
-		searchPattern := "%" + term + "%"
-		query = query.Where(
-			"name LIKE ? OR path LIKE ? OR status LIKE ? OR COALESCE(dir_name, '') LIKE ?",
-			searchPattern, searchPattern, searchPattern, searchPattern,
-		)
-	}
-	if err := query.Find(&projectsArray).Error; err != nil {
-		return nil, pagination.Response{}, fmt.Errorf("failed to list projects: %w", err)
-	}
-
 	items := s.fetchProjectStatusConcurrently(ctx, projectsArray)
 
 	limit := params.Limit
@@ -1395,7 +1437,7 @@ func (s *ProjectService) listProjectsByStatus(
 
 // fetchProjectStatusConcurrently fetches live Docker status for multiple projects in parallel
 // Optimized to use a single Docker API call instead of N calls + N file reads
-func (s *ProjectService) fetchProjectStatusConcurrently(ctx context.Context, projectsList []models.Project) []project.Details {
+func (s *ProjectService) fetchProjectStatusConcurrently(ctx context.Context, projectsList []project.Project) []project.Details {
 	// 1. Fetch all compose containers in one go
 	containers, err := projects.ListGlobalComposeContainers(ctx)
 	if err != nil {
@@ -1404,7 +1446,7 @@ func (s *ProjectService) fetchProjectStatusConcurrently(ctx context.Context, pro
 		results := make([]project.Details, len(projectsList))
 		for i, p := range projectsList {
 			_ = mapper.MapStruct(p, &results[i])
-			results[i].Status = string(models.ProjectStatusUnknown)
+			results[i].Status = string(project.ProjectStatusUnknown)
 		}
 		return results
 	}
@@ -1427,7 +1469,7 @@ func (s *ProjectService) fetchProjectStatusConcurrently(ctx context.Context, pro
 	return results
 }
 
-func (s *ProjectService) mapProjectToDto(ctx context.Context, p models.Project, containersByProject map[string][]container.Summary) project.Details {
+func (s *ProjectService) mapProjectToDto(ctx context.Context, p project.Project, containersByProject map[string][]container.Summary) project.Details {
 	var resp project.Details
 	_ = mapper.MapStruct(p, &resp)
 
@@ -1512,22 +1554,24 @@ func (s *ProjectService) mapProjectToDto(ctx context.Context, p models.Project, 
 			resp.ServiceCount = count
 			// Update DB asynchronously
 			go func(ctx context.Context, pid string, c int) {
-				s.db.WithContext(ctx).Model(&models.Project{}).Where("id = ?", pid).Update("service_count", c)
+				if err := s.store.UpdateProjectServiceCount(ctx, pid, c); err != nil {
+					slog.WarnContext(ctx, "failed to update project service count", "projectID", pid, "error", err)
+				}
 			}(context.WithoutCancel(ctx), p.ID, count)
 		}
 	}
 
 	// Calculate Status
 	if len(services) == 0 {
-		resp.Status = string(models.ProjectStatusStopped)
+		resp.Status = string(project.ProjectStatusStopped)
 	} else {
 		switch {
 		case runningCount >= resp.ServiceCount && resp.ServiceCount > 0:
-			resp.Status = string(models.ProjectStatusRunning)
+			resp.Status = string(project.ProjectStatusRunning)
 		case runningCount > 0:
-			resp.Status = string(models.ProjectStatusPartiallyRunning)
+			resp.Status = string(project.ProjectStatusPartiallyRunning)
 		default:
-			resp.Status = string(models.ProjectStatusStopped)
+			resp.Status = string(project.ProjectStatusStopped)
 		}
 	}
 
@@ -1551,7 +1595,7 @@ func (s *ProjectService) getProjectMetadataFromPath(ctx context.Context, project
 
 // End Table Functions
 
-func (s *ProjectService) countServicesFromCompose(ctx context.Context, p models.Project) (int, error) {
+func (s *ProjectService) countServicesFromCompose(ctx context.Context, p project.Project) (int, error) {
 	projectsDirSetting := s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects")
 	projectsDirectory, err := fs.GetProjectsDirectory(ctx, strings.TrimSpace(projectsDirSetting))
 	if err != nil {
@@ -1572,9 +1616,9 @@ func (s *ProjectService) countServicesFromCompose(ctx context.Context, p models.
 	return len(proj.Services), nil
 }
 
-func (s *ProjectService) calculateProjectStatus(services []ProjectServiceInfo) models.ProjectStatus {
+func (s *ProjectService) calculateProjectStatus(services []ProjectServiceInfo) project.ProjectStatus {
 	if len(services) == 0 {
-		return models.ProjectStatusUnknown
+		return project.ProjectStatusUnknown
 	}
 
 	runningCount := 0
@@ -1591,13 +1635,13 @@ func (s *ProjectService) calculateProjectStatus(services []ProjectServiceInfo) m
 	}
 
 	if runningCount == len(services) {
-		return models.ProjectStatusRunning
+		return project.ProjectStatusRunning
 	}
 	if runningCount > 0 {
-		return models.ProjectStatusPartiallyRunning
+		return project.ProjectStatusPartiallyRunning
 	}
 	if stoppedCount > 0 {
-		return models.ProjectStatusStopped
+		return project.ProjectStatusStopped
 	}
-	return models.ProjectStatusUnknown
+	return project.ProjectStatusUnknown
 }

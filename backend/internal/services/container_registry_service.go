@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/cache"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
@@ -37,19 +38,52 @@ func getHeaderCaseInsensitive(h http.Header, key string) string {
 	return ""
 }
 
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case !a && b:
+		return -1
+	default:
+		return 1
+	}
+}
+
+func compareTime(a, b time.Time) int {
+	switch {
+	case a.Before(b):
+		return -1
+	case a.After(b):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func boolFilterMatches(value bool, filterValue string) bool {
+	switch strings.TrimSpace(strings.ToLower(filterValue)) {
+	case "true", "1":
+		return value
+	case "false", "0":
+		return !value
+	default:
+		return false
+	}
+}
+
 type ContainerRegistryService struct {
-	db         *database.DB
+	store      database.ContainerRegistryStore
 	httpClient *http.Client
 	cache      map[string]*cache.Cache[string] // imageRef -> digest cache
 	cacheMu    sync.RWMutex
 }
 
-func NewContainerRegistryService(db *database.DB) *ContainerRegistryService {
+func NewContainerRegistryService(store database.ContainerRegistryStore) *ContainerRegistryService {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
 
 	return &ContainerRegistryService{
-		db: db,
+		store: store,
 		httpClient: &http.Client{
 			Timeout:   registryCheckTimeout,
 			Transport: transport,
@@ -58,35 +92,75 @@ func NewContainerRegistryService(db *database.DB) *ContainerRegistryService {
 	}
 }
 
-func (s *ContainerRegistryService) GetAllRegistries(ctx context.Context) ([]models.ContainerRegistry, error) {
-	var registries []models.ContainerRegistry
-	if err := s.db.WithContext(ctx).Find(&registries).Error; err != nil {
+func (s *ContainerRegistryService) GetAllRegistries(ctx context.Context) ([]containerregistry.ModelContainerRegistry, error) {
+	registries, err := s.store.ListContainerRegistries(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get container registries: %w", err)
 	}
 	return registries, nil
 }
 
 func (s *ContainerRegistryService) GetRegistriesPaginated(ctx context.Context, params pagination.QueryParams) ([]containerregistry.ContainerRegistry, pagination.Response, error) {
-	var registries []models.ContainerRegistry
-	q := s.db.WithContext(ctx).Model(&models.ContainerRegistry{})
-
-	if term := strings.TrimSpace(params.Search); term != "" {
-		searchPattern := "%" + term + "%"
-		q = q.Where(
-			"url LIKE ? OR username LIKE ? OR COALESCE(description, '') LIKE ?",
-			searchPattern, searchPattern, searchPattern,
-		)
+	if params.Limit != -1 {
+		if params.Limit <= 0 {
+			params.Limit = 20
+		} else if params.Limit > 100 {
+			params.Limit = 100
+		}
+	}
+	if params.Start < 0 {
+		params.Start = 0
 	}
 
-	q = pagination.ApplyBooleanFilter(q, "enabled", params.Filters["enabled"])
-	q = pagination.ApplyBooleanFilter(q, "insecure", params.Filters["insecure"])
-
-	paginationResp, err := pagination.PaginateAndSortDB(params, q, &registries)
+	registries, err := s.store.ListContainerRegistries(ctx)
 	if err != nil {
-		return nil, pagination.Response{}, fmt.Errorf("failed to paginate container registries: %w", err)
+		return nil, pagination.Response{}, fmt.Errorf("failed to list container registries: %w", err)
 	}
 
-	out, mapErr := mapper.MapSlice[models.ContainerRegistry, containerregistry.ContainerRegistry](registries)
+	config := pagination.Config[containerregistry.ModelContainerRegistry]{
+		SearchAccessors: []pagination.SearchAccessor[containerregistry.ModelContainerRegistry]{
+			func(r containerregistry.ModelContainerRegistry) (string, error) { return r.URL, nil },
+			func(r containerregistry.ModelContainerRegistry) (string, error) { return r.Username, nil },
+			func(r containerregistry.ModelContainerRegistry) (string, error) {
+				if r.Description == nil {
+					return "", nil
+				}
+				return *r.Description, nil
+			},
+		},
+		SortBindings: []pagination.SortBinding[containerregistry.ModelContainerRegistry]{
+			{Key: "url", Fn: func(a, b containerregistry.ModelContainerRegistry) int { return strings.Compare(a.URL, b.URL) }},
+			{Key: "username", Fn: func(a, b containerregistry.ModelContainerRegistry) int {
+				return strings.Compare(a.Username, b.Username)
+			}},
+			{Key: "description", Fn: func(a, b containerregistry.ModelContainerRegistry) int {
+				return strings.Compare(utils.DerefString(a.Description), utils.DerefString(b.Description))
+			}},
+			{Key: "insecure", Fn: func(a, b containerregistry.ModelContainerRegistry) int { return compareBool(a.Insecure, b.Insecure) }},
+			{Key: "enabled", Fn: func(a, b containerregistry.ModelContainerRegistry) int { return compareBool(a.Enabled, b.Enabled) }},
+			{Key: "createdAt", Fn: func(a, b containerregistry.ModelContainerRegistry) int { return compareTime(a.CreatedAt, b.CreatedAt) }},
+			{Key: "updatedAt", Fn: func(a, b containerregistry.ModelContainerRegistry) int { return compareTime(a.UpdatedAt, b.UpdatedAt) }},
+		},
+		FilterAccessors: []pagination.FilterAccessor[containerregistry.ModelContainerRegistry]{
+			{
+				Key: "enabled",
+				Fn: func(r containerregistry.ModelContainerRegistry, filterValue string) bool {
+					return boolFilterMatches(r.Enabled, filterValue)
+				},
+			},
+			{
+				Key: "insecure",
+				Fn: func(r containerregistry.ModelContainerRegistry, filterValue string) bool {
+					return boolFilterMatches(r.Insecure, filterValue)
+				},
+			},
+		},
+	}
+
+	result := pagination.SearchOrderAndPaginate(registries, params, config)
+	paginationResp := pagination.BuildResponseFromFilterResult(result, params)
+
+	out, mapErr := mapper.MapSlice[containerregistry.ModelContainerRegistry, containerregistry.ContainerRegistry](result.Items)
 	if mapErr != nil {
 		return nil, pagination.Response{}, fmt.Errorf("failed to map registries: %w", mapErr)
 	}
@@ -94,40 +168,50 @@ func (s *ContainerRegistryService) GetRegistriesPaginated(ctx context.Context, p
 	return out, paginationResp, nil
 }
 
-func (s *ContainerRegistryService) GetRegistryByID(ctx context.Context, id string) (*models.ContainerRegistry, error) {
-	var registry models.ContainerRegistry
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&registry).Error; err != nil {
+func (s *ContainerRegistryService) GetRegistryByID(ctx context.Context, id string) (*containerregistry.ModelContainerRegistry, error) {
+	registry, err := s.store.GetContainerRegistryByID(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get container registry: %w", err)
 	}
-	return &registry, nil
+	if registry == nil {
+		return nil, fmt.Errorf("failed to get container registry: not found")
+	}
+	return registry, nil
 }
 
-func (s *ContainerRegistryService) CreateRegistry(ctx context.Context, req models.CreateContainerRegistryRequest) (*models.ContainerRegistry, error) {
+func (s *ContainerRegistryService) CreateRegistry(ctx context.Context, req containerregistry.CreateContainerRegistryRequest) (*containerregistry.ModelContainerRegistry, error) {
 	// Encrypt the token before storing
 	encryptedToken, err := crypto.Encrypt(req.Token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
-	registry := &models.ContainerRegistry{
+	registry := &containerregistry.ModelContainerRegistry{
 		URL:         req.URL,
 		Username:    req.Username,
 		Token:       encryptedToken,
 		Description: req.Description,
 		Insecure:    req.Insecure != nil && *req.Insecure,
 		Enabled:     req.Enabled == nil || *req.Enabled,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
 	}
 
-	if err := s.db.WithContext(ctx).Create(registry).Error; err != nil {
+	created, err := s.store.CreateContainerRegistry(ctx, database.ContainerRegistryCreateInput{
+		ID:          uuid.NewString(),
+		URL:         registry.URL,
+		Username:    registry.Username,
+		Token:       registry.Token,
+		Description: registry.Description,
+		Insecure:    registry.Insecure,
+		Enabled:     registry.Enabled,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to create registry: %w", err)
 	}
 
-	return registry, nil
+	return created, nil
 }
 
-func (s *ContainerRegistryService) UpdateRegistry(ctx context.Context, id string, req models.UpdateContainerRegistryRequest) (*models.ContainerRegistry, error) {
+func (s *ContainerRegistryService) UpdateRegistry(ctx context.Context, id string, req containerregistry.UpdateContainerRegistryRequest) (*containerregistry.ModelContainerRegistry, error) {
 	registry, err := s.GetRegistryByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -150,17 +234,25 @@ func (s *ContainerRegistryService) UpdateRegistry(ctx context.Context, id string
 	utils.UpdateIfChanged(&registry.Insecure, req.Insecure)
 	utils.UpdateIfChanged(&registry.Enabled, req.Enabled)
 
-	registry.UpdatedAt = time.Now()
-
-	if err := s.db.WithContext(ctx).Save(registry).Error; err != nil {
+	updated, err := s.store.UpdateContainerRegistry(ctx, database.ContainerRegistryUpdateInput{
+		ID:          registry.ID,
+		URL:         registry.URL,
+		Username:    registry.Username,
+		Token:       registry.Token,
+		Description: registry.Description,
+		Insecure:    registry.Insecure,
+		Enabled:     registry.Enabled,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to update registry: %w", err)
 	}
 
-	return registry, nil
+	return updated, nil
 }
 
 func (s *ContainerRegistryService) DeleteRegistry(ctx context.Context, id string) error {
-	if err := s.db.WithContext(ctx).Where("id = ?", id).Delete(&models.ContainerRegistry{}).Error; err != nil {
+	_, err := s.store.DeleteContainerRegistryByID(ctx, id)
+	if err != nil {
 		return fmt.Errorf("failed to delete container registry: %w", err)
 	}
 	return nil
@@ -182,9 +274,9 @@ func (s *ContainerRegistryService) GetDecryptedToken(ctx context.Context, id str
 }
 
 // GetEnabledRegistries returns all enabled registries
-func (s *ContainerRegistryService) GetEnabledRegistries(ctx context.Context) ([]models.ContainerRegistry, error) {
-	var registries []models.ContainerRegistry
-	if err := s.db.WithContext(ctx).Where("enabled = ?", true).Find(&registries).Error; err != nil {
+func (s *ContainerRegistryService) GetEnabledRegistries(ctx context.Context) ([]containerregistry.ModelContainerRegistry, error) {
+	registries, err := s.store.ListEnabledContainerRegistries(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get enabled container registries: %w", err)
 	}
 	return registries, nil
@@ -410,13 +502,13 @@ func (s *ContainerRegistryService) SyncRegistries(ctx context.Context, syncItems
 	return s.deleteUnsyncedInternal(ctx, existingMap, syncedIDs)
 }
 
-func (s *ContainerRegistryService) getExistingRegistriesMapInternal(ctx context.Context) (map[string]*models.ContainerRegistry, error) {
-	var existingRegistries []models.ContainerRegistry
-	if err := s.db.WithContext(ctx).Find(&existingRegistries).Error; err != nil {
+func (s *ContainerRegistryService) getExistingRegistriesMapInternal(ctx context.Context) (map[string]*containerregistry.ModelContainerRegistry, error) {
+	existingRegistries, err := s.store.ListContainerRegistries(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get existing registries: %w", err)
 	}
 
-	existingMap := make(map[string]*models.ContainerRegistry)
+	existingMap := make(map[string]*containerregistry.ModelContainerRegistry)
 	for i := range existingRegistries {
 		existingMap[existingRegistries[i].ID] = &existingRegistries[i]
 	}
@@ -424,7 +516,7 @@ func (s *ContainerRegistryService) getExistingRegistriesMapInternal(ctx context.
 	return existingMap, nil
 }
 
-func (s *ContainerRegistryService) processSyncItemInternal(ctx context.Context, item containerregistry.Sync, existingMap map[string]*models.ContainerRegistry) error {
+func (s *ContainerRegistryService) processSyncItemInternal(ctx context.Context, item containerregistry.Sync, existingMap map[string]*containerregistry.ModelContainerRegistry) error {
 	existing, exists := existingMap[item.ID]
 	if exists {
 		return s.updateExistingRegistryInternal(ctx, item, existing)
@@ -432,12 +524,20 @@ func (s *ContainerRegistryService) processSyncItemInternal(ctx context.Context, 
 	return s.createNewRegistryInternal(ctx, item)
 }
 
-func (s *ContainerRegistryService) updateExistingRegistryInternal(ctx context.Context, item containerregistry.Sync, existing *models.ContainerRegistry) error {
+func (s *ContainerRegistryService) updateExistingRegistryInternal(ctx context.Context, item containerregistry.Sync, existing *containerregistry.ModelContainerRegistry) error {
 	needsUpdate := s.checkRegistryNeedsUpdateInternal(item, existing)
 
 	if needsUpdate {
-		existing.UpdatedAt = time.Now()
-		if err := s.db.WithContext(ctx).Save(existing).Error; err != nil {
+		_, err := s.store.UpdateContainerRegistry(ctx, database.ContainerRegistryUpdateInput{
+			ID:          existing.ID,
+			URL:         existing.URL,
+			Username:    existing.Username,
+			Token:       existing.Token,
+			Description: existing.Description,
+			Insecure:    existing.Insecure,
+			Enabled:     existing.Enabled,
+		})
+		if err != nil {
 			return fmt.Errorf("failed to update registry %s: %w", item.ID, err)
 		}
 	}
@@ -445,7 +545,7 @@ func (s *ContainerRegistryService) updateExistingRegistryInternal(ctx context.Co
 	return nil
 }
 
-func (s *ContainerRegistryService) checkRegistryNeedsUpdateInternal(item containerregistry.Sync, existing *models.ContainerRegistry) bool {
+func (s *ContainerRegistryService) checkRegistryNeedsUpdateInternal(item containerregistry.Sync, existing *containerregistry.ModelContainerRegistry) bool {
 	needsUpdate := utils.UpdateIfChanged(&existing.URL, item.URL)
 	needsUpdate = utils.UpdateIfChanged(&existing.Username, item.Username) || needsUpdate
 
@@ -468,31 +568,27 @@ func (s *ContainerRegistryService) createNewRegistryInternal(ctx context.Context
 		return fmt.Errorf("failed to encrypt token for new registry %s: %w", item.ID, err)
 	}
 
-	newRegistry := &models.ContainerRegistry{
-		BaseModel: models.BaseModel{
-			ID: item.ID,
-		},
+	_, err = s.store.CreateContainerRegistry(ctx, database.ContainerRegistryCreateInput{
+		ID:          item.ID,
 		URL:         item.URL,
 		Username:    item.Username,
 		Token:       encryptedToken,
 		Description: item.Description,
 		Insecure:    item.Insecure,
 		Enabled:     item.Enabled,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	if err := s.db.WithContext(ctx).Create(newRegistry).Error; err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to create registry %s: %w", item.ID, err)
 	}
 
 	return nil
 }
 
-func (s *ContainerRegistryService) deleteUnsyncedInternal(ctx context.Context, existingMap map[string]*models.ContainerRegistry, syncedIDs map[string]bool) error {
+func (s *ContainerRegistryService) deleteUnsyncedInternal(ctx context.Context, existingMap map[string]*containerregistry.ModelContainerRegistry, syncedIDs map[string]bool) error {
 	for id := range existingMap {
 		if !syncedIDs[id] {
-			if err := s.db.WithContext(ctx).Where("id = ?", id).Delete(&models.ContainerRegistry{}).Error; err != nil {
+			_, err := s.store.DeleteContainerRegistryByID(ctx, id)
+			if err != nil {
 				return fmt.Errorf("failed to delete registry %s: %w", id, err)
 			}
 		}

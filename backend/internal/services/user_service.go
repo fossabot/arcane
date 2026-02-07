@@ -4,21 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
-
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"time"
 
 	"crypto/subtle"
 
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pagination"
+	"github.com/getarcaneapp/arcane/types/base"
 	"github.com/getarcaneapp/arcane/types/user"
 )
 
@@ -41,13 +39,13 @@ func DefaultArgon2Params() *Argon2Params {
 }
 
 type UserService struct {
-	db           *database.DB
+	store        database.UserStore
 	argon2Params *Argon2Params
 }
 
-func NewUserService(db *database.DB) *UserService {
+func NewUserService(store database.UserStore) *UserService {
 	return &UserService{
-		db:           db,
+		store:        store,
 		argon2Params: DefaultArgon2Params(),
 	}
 }
@@ -130,121 +128,75 @@ func (s *UserService) validateArgon2Password(encodedHash, password string) error
 	return nil
 }
 
-func (s *UserService) CreateUser(ctx context.Context, user *models.User) (*models.User, error) {
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(user).Error; err != nil {
-			return fmt.Errorf("failed to create user: %w", err)
-		}
-		return nil
-	})
+func (s *UserService) CreateUser(ctx context.Context, user *user.ModelUser) (*user.ModelUser, error) {
+	created, err := s.store.CreateUser(ctx, *user)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+	return created, nil
+}
+
+func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*user.ModelUser, error) {
+	user, err := s.store.GetUserByUsername(ctx, username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	if user == nil {
+		return nil, ErrUserNotFound
 	}
 	return user, nil
 }
 
-func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
-	var user models.User
-	if err := s.db.WithContext(ctx).Where("username = ?", username).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
+func (s *UserService) GetUserByID(ctx context.Context, id string) (*user.ModelUser, error) {
+	user, err := s.store.GetUserByID(ctx, id)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return &user, nil
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
+	return user, nil
 }
 
-func (s *UserService) GetUserByID(ctx context.Context, id string) (*models.User, error) {
-	var user models.User
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
+func (s *UserService) GetUserByOidcSubjectId(ctx context.Context, subjectID string) (*user.ModelUser, error) {
+	user, err := s.store.GetUserByOidcSubjectID(ctx, subjectID)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return &user, nil
-}
-
-func (s *UserService) GetUserByOidcSubjectId(ctx context.Context, subjectId string) (*models.User, error) {
-	var user models.User
-	if err := s.db.WithContext(ctx).Where("oidc_subject_id = ?", subjectId).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
+	if user == nil {
+		return nil, ErrUserNotFound
 	}
-	return &user, nil
+	return user, nil
 }
 
-func (s *UserService) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	var user models.User
-	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
+func (s *UserService) GetUserByEmail(ctx context.Context, email string) (*user.ModelUser, error) {
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
-	return &user, nil
-}
-
-func (s *UserService) UpdateUser(ctx context.Context, user *models.User) (*models.User, error) {
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(user).Error; err != nil {
-			return fmt.Errorf("failed to update user: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	if user == nil {
+		return nil, ErrUserNotFound
 	}
 	return user, nil
 }
 
-// AttachOidcSubjectTransactional safely links an OIDC subject to the given user inside a DB transaction.
-// It uses a row lock (FOR UPDATE) to prevent concurrent merges from racing and validates that the
-// user isn't already linked to a different subject. The provided updateFn can mutate the user (e.g.,
-// roles, display name, tokens, last login) before persisting.
-//
-// Note: The clause.Locking{Strength: "UPDATE"} statement is used to acquire a row-level lock.
-// This MUST be done inside a transaction to ensure the lock is held until the update is committed.
-func (s *UserService) AttachOidcSubjectTransactional(ctx context.Context, userID string, subject string, updateFn func(u *models.User)) (*models.User, error) {
-	var out *models.User
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var u models.User
-		if err := tx.
-			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", userID).
-			First(&u).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrUserNotFound
-			}
-			return fmt.Errorf("failed to load user for OIDC merge: %w", err)
-		}
+func (s *UserService) UpdateUser(ctx context.Context, user *user.ModelUser) (*user.ModelUser, error) {
+	updated, err := s.store.SaveUser(ctx, *user)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update user: %w", err)
+	}
+	return updated, nil
+}
 
-		// If already linked to a different subject, abort
-		if u.OidcSubjectId != nil && *u.OidcSubjectId != "" && *u.OidcSubjectId != subject {
-			return fmt.Errorf("user already linked to another OIDC subject")
-		}
-
-		// Link subject
-		u.OidcSubjectId = &subject
-
-		if updateFn != nil {
-			updateFn(&u)
-		}
-
-		if err := tx.Save(&u).Error; err != nil {
-			// Bubble up uniqueness violations with a clearer message
-			if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
-				return fmt.Errorf("oidc subject is already linked to another user: %w", err)
-			}
-			return fmt.Errorf("failed to persist OIDC merge: %w", err)
-		}
-		out = &u
-		return nil
-	})
+// AttachOidcSubjectTransactional safely links an OIDC subject to the given user.
+// The store implementation handles transactional locking semantics for each engine.
+func (s *UserService) AttachOidcSubjectTransactional(ctx context.Context, userID string, subject string, updateFn func(u *user.ModelUser)) (*user.ModelUser, error) {
+	out, err := s.store.AttachOidcSubjectTransactional(ctx, userID, subject, updateFn)
 	if err != nil {
 		return nil, err
+	}
+	if out == nil {
+		return nil, ErrUserNotFound
 	}
 	return out, nil
 }
@@ -256,48 +208,44 @@ func (s *UserService) CreateDefaultAdmin(ctx context.Context) error {
 		return fmt.Errorf("failed to hash default admin password: %w", err)
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&models.User{}).Count(&count).Error; err != nil {
-			return fmt.Errorf("failed to count users: %w", err)
-		}
-
-		if count > 0 {
-			slog.WarnContext(ctx, "Users already exist, skipping default admin creation")
-			return nil
-		}
-
-		email := "admin@localhost"
-		displayName := "Arcane Admin"
-		userModel := &models.User{
-			Username:               "arcane",
-			Email:                  &email,
-			DisplayName:            &displayName,
-			PasswordHash:           hashedPassword,
-			Roles:                  models.StringSlice{"admin"},
-			RequiresPasswordChange: true,
-		}
-
-		if err := tx.Create(userModel).Error; err != nil {
-			return fmt.Errorf("failed to create default admin user: %w", err)
-		}
-
-		slog.InfoContext(ctx, "👑 Default admin user created!")
-		slog.InfoContext(ctx, "🔑 Username: arcane")
-		slog.InfoContext(ctx, "🔑 Password: arcane-admin")
-		slog.InfoContext(ctx, "⚠️  User will be prompted to change password on first login")
-
+	count, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to count users: %w", err)
+	}
+	if count > 0 {
+		slog.WarnContext(ctx, "Users already exist, skipping default admin creation")
 		return nil
-	})
+	}
+
+	email := "admin@localhost"
+	displayName := "Arcane Admin"
+	userModel := &user.ModelUser{
+		Username:               "arcane",
+		Email:                  &email,
+		DisplayName:            &displayName,
+		PasswordHash:           hashedPassword,
+		Roles:                  base.StringSlice{"admin"},
+		RequiresPasswordChange: true,
+	}
+
+	if _, err := s.store.CreateUser(ctx, *userModel); err != nil {
+		return fmt.Errorf("failed to create default admin user: %w", err)
+	}
+
+	slog.InfoContext(ctx, "👑 Default admin user created!")
+	slog.InfoContext(ctx, "🔑 Username: arcane")
+	slog.InfoContext(ctx, "🔑 Password: arcane-admin")
+	slog.InfoContext(ctx, "⚠️  User will be prompted to change password on first login")
+
+	return nil
 }
 
 func (s *UserService) DeleteUser(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Delete(&models.User{}, "id = ?", id).Error; err != nil {
-			return fmt.Errorf("failed to delete user: %w", err)
-		}
-		return nil
-	})
+	_, err := s.store.DeleteUserByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+	return nil
 }
 
 func (s *UserService) HashPassword(password string) (string, error) {
@@ -314,66 +262,88 @@ func (s *UserService) UpgradePasswordHash(ctx context.Context, userID, password 
 		return fmt.Errorf("failed to create new hash: %w", err)
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.User{}).
-			Where("id = ?", userID).
-			Update("password_hash", newHash).Error; err != nil {
-			return fmt.Errorf("failed to update password hash: %w", err)
-		}
-		return nil
-	})
+	if err := s.store.UpdateUserPasswordHash(ctx, userID, newHash, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to update password hash: %w", err)
+	}
+	return nil
 }
 
 func (s *UserService) ListUsersPaginated(ctx context.Context, params pagination.QueryParams) ([]user.User, pagination.Response, error) {
-	var users []models.User
-	query := s.db.WithContext(ctx).Model(&models.User{})
-
-	if term := strings.TrimSpace(params.Search); term != "" {
-		searchPattern := "%" + term + "%"
-		query = query.Where(
-			"username LIKE ? OR COALESCE(email, '') LIKE ? OR COALESCE(display_name, '') LIKE ?",
-			searchPattern, searchPattern, searchPattern,
-		)
+	if params.Limit != -1 {
+		if params.Limit <= 0 {
+			params.Limit = 20
+		} else if params.Limit > 100 {
+			params.Limit = 100
+		}
+	}
+	if params.Start < 0 {
+		params.Start = 0
 	}
 
-	paginationResp, err := pagination.PaginateAndSortDB(params, query, &users)
+	users, err := s.store.ListUsers(ctx)
 	if err != nil {
-		return nil, pagination.Response{}, fmt.Errorf("failed to paginate users: %w", err)
+		return nil, pagination.Response{}, fmt.Errorf("failed to list users: %w", err)
 	}
 
-	result := make([]user.User, len(users))
-	for i, u := range users {
-		result[i] = toUserResponseDto(u)
+	config := pagination.Config[user.ModelUser]{
+		SearchAccessors: []pagination.SearchAccessor[user.ModelUser]{
+			func(u user.ModelUser) (string, error) { return u.Username, nil },
+			func(u user.ModelUser) (string, error) { return userStringPtrValue(u.Email), nil },
+			func(u user.ModelUser) (string, error) { return userStringPtrValue(u.DisplayName), nil },
+		},
+		SortBindings: []pagination.SortBinding[user.ModelUser]{
+			{Key: "username", Fn: func(a, b user.ModelUser) int { return strings.Compare(a.Username, b.Username) }},
+			{Key: "displayName", Fn: func(a, b user.ModelUser) int {
+				return strings.Compare(userStringPtrValue(a.DisplayName), userStringPtrValue(b.DisplayName))
+			}},
+			{Key: "email", Fn: func(a, b user.ModelUser) int {
+				return strings.Compare(userStringPtrValue(a.Email), userStringPtrValue(b.Email))
+			}},
+			{Key: "lastLogin", Fn: func(a, b user.ModelUser) int { return compareOptionalTime(a.LastLogin, b.LastLogin) }},
+			{Key: "createdAt", Fn: func(a, b user.ModelUser) int { return compareTime(a.CreatedAt, b.CreatedAt) }},
+			{Key: "updatedAt", Fn: func(a, b user.ModelUser) int { return compareOptionalTime(a.UpdatedAt, b.UpdatedAt) }},
+		},
 	}
 
-	return result, paginationResp, nil
+	result := pagination.SearchOrderAndPaginate(users, params, config)
+	paginationResp := pagination.BuildResponseFromFilterResult(result, params)
+
+	items := make([]user.User, 0, len(result.Items))
+	for _, u := range result.Items {
+		items = append(items, toUserResponseDto(u))
+	}
+
+	return items, paginationResp, nil
 }
 
-func toUserResponseDto(u models.User) user.User {
+func toUserResponseDto(u user.ModelUser) user.User {
+	updatedAt := u.CreatedAt
+	if u.UpdatedAt != nil {
+		updatedAt = *u.UpdatedAt
+	}
+
 	return user.User{
-		ID:            u.ID,
-		Username:      u.Username,
-		DisplayName:   u.DisplayName,
-		Email:         u.Email,
-		Roles:         u.Roles,
-		OidcSubjectId: u.OidcSubjectId,
-		Locale:        u.Locale,
-		CreatedAt:     u.CreatedAt.Format("2006-01-02T15:04:05.999999Z"),
-		UpdatedAt:     u.UpdatedAt.Format("2006-01-02T15:04:05.999999Z"),
+		ID:                     u.ID,
+		Username:               u.Username,
+		DisplayName:            u.DisplayName,
+		Email:                  u.Email,
+		Roles:                  u.Roles,
+		OidcSubjectId:          u.OidcSubjectId,
+		Locale:                 u.Locale,
+		CreatedAt:              u.CreatedAt.Format("2006-01-02T15:04:05.999999Z"),
+		UpdatedAt:              updatedAt.Format("2006-01-02T15:04:05.999999Z"),
+		RequiresPasswordChange: u.RequiresPasswordChange,
 	}
 }
 
-func (s *UserService) GetUser(ctx context.Context, userID string) (*models.User, error) {
+func (s *UserService) GetUser(ctx context.Context, userID string) (*user.ModelUser, error) {
 	slog.Debug("GetUser called", "user_id", userID)
-	return s.getUserInternal(ctx, userID, s.db.DB)
+	return s.store.GetUserByID(ctx, userID)
 }
 
-func (s *UserService) getUserInternal(ctx context.Context, userID string, tx *gorm.DB) (*models.User, error) {
-	var user models.User
-	err := tx.
-		WithContext(ctx).
-		Where("id = ?", userID).
-		First(&user).
-		Error
-	return &user, err
+func userStringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

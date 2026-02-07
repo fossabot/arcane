@@ -1,0 +1,206 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema:
+      - "resources/migrations/goose_postgres"
+    queries:
+      - "internal/database/queries/postgres"
+    gen:
+      go:
+        package: "pgdb"
+        out: "internal/database/models/pgdb"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_empty_slices: true
+        emit_result_struct_pointers: true
+        overrides:
+          - column: "users.roles"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "StringSlice"
+          - column: "public.users.roles"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "StringSlice"
+          - column: "containers.ports"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.mounts"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.networks"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.environment"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.command"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.repo_tags"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.repo_digests"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "volumes.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "volumes.options"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.ipam"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.options"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.old_image_versions"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.new_image_versions"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.details"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "events.metadata"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "notification_settings.config"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "notification_logs.metadata"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+  - engine: "sqlite"
+    schema:
+      - "resources/migrations/goose_sqlite"
+    queries:
+      - "internal/database/queries/sqlite"
+    gen:
+      go:
+        package: "sqlitedb"
+        out: "internal/database/models/sqlitedb"
+        sql_package: "database/sql"
+        emit_json_tags: true
+        emit_empty_slices: true
+        emit_result_struct_pointers: true
+        overrides:
+          - column: "users.roles"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "StringSlice"
+          - column: "main.users.roles"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "StringSlice"
+          - column: "containers.ports"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.mounts"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.networks"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.environment"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "containers.command"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.repo_tags"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.repo_digests"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "images.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "volumes.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "volumes.options"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.ipam"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.labels"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "networks.options"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.old_image_versions"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.new_image_versions"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "auto_update_records.details"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "events.metadata"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "notification_settings.config"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"
+          - column: "notification_logs.metadata"
+            go_type:
+              import: "github.com/getarcaneapp/arcane/types/base"
+              type: "JSON"

@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/nicholas-fedor/shoutrrr"
 	"github.com/nicholas-fedor/shoutrrr/pkg/services/chat/discord"
 )
 
 // BuildDiscordURL converts DiscordConfig to Shoutrrr URL format using shoutrrr's Config
-func BuildDiscordURL(config models.DiscordConfig) (string, error) {
+func BuildDiscordURL(config notification.DiscordConfig) (string, error) {
 	discordConfig := &discord.Config{
 		WebhookID: config.WebhookID,
 		Token:     config.Token,
@@ -23,7 +23,7 @@ func BuildDiscordURL(config models.DiscordConfig) (string, error) {
 }
 
 // SendDiscord sends a message via Shoutrrr Discord using proper service configuration
-func SendDiscord(ctx context.Context, config models.DiscordConfig, message string) error {
+func SendDiscord(ctx context.Context, config notification.DiscordConfig, message string) error {
 	if config.WebhookID == "" {
 		return fmt.Errorf("discord webhook ID is empty")
 	}

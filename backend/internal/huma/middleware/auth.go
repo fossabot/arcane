@@ -7,8 +7,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/config"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
+	"github.com/getarcaneapp/arcane/types/base"
+	"github.com/getarcaneapp/arcane/types/user"
 )
 
 const (
@@ -37,8 +38,8 @@ func GetUserIDFromContext(ctx context.Context) (string, bool) {
 }
 
 // GetCurrentUserFromContext retrieves the current user from the context.
-func GetCurrentUserFromContext(ctx context.Context) (*models.User, bool) {
-	u, ok := ctx.Value(ContextKeyCurrentUser).(*models.User)
+func GetCurrentUserFromContext(ctx context.Context) (*user.ModelUser, bool) {
+	u, ok := ctx.Value(ContextKeyCurrentUser).(*user.ModelUser)
 	return u, ok
 }
 
@@ -79,7 +80,7 @@ func parseSecurityRequirements(ctx operationProvider) securityRequirements {
 }
 
 // tryBearerAuth attempts Bearer token authentication.
-func tryBearerAuth(ctx huma.Context, authService *services.AuthService) (*models.User, bool) {
+func tryBearerAuth(ctx huma.Context, authService *services.AuthService) (*user.ModelUser, bool) {
 	token := extractBearerToken(ctx)
 	if token == "" {
 		return nil, false
@@ -92,7 +93,7 @@ func tryBearerAuth(ctx huma.Context, authService *services.AuthService) (*models
 }
 
 // tryApiKeyAuth checks if API key authentication should be allowed through.
-func tryApiKeyAuth(ctx huma.Context, apiKeyService *services.ApiKeyService) (*models.User, bool) {
+func tryApiKeyAuth(ctx huma.Context, apiKeyService *services.ApiKeyService) (*user.ModelUser, bool) {
 	apiKey := ctx.Header(headerApiKey)
 	if apiKey == "" {
 		return nil, false
@@ -108,7 +109,7 @@ func tryApiKeyAuth(ctx huma.Context, apiKeyService *services.ApiKeyService) (*mo
 
 // tryAgentAuth checks if the request is from an authenticated agent.
 // Returns a sudo agent user if the agent token is valid.
-func tryAgentAuth(ctx huma.Context, cfg *config.Config) (*models.User, bool) {
+func tryAgentAuth(ctx huma.Context, cfg *config.Config) (*user.ModelUser, bool) {
 	if cfg == nil || !cfg.AgentMode {
 		return nil, false
 	}
@@ -136,10 +137,10 @@ func tryAgentAuth(ctx huma.Context, cfg *config.Config) (*models.User, bool) {
 }
 
 // createAgentSudoUser creates a sudo user for agent authentication.
-func createAgentSudoUser() *models.User {
+func createAgentSudoUser() *user.ModelUser {
 	email := "agent@getarcane.app"
-	return &models.User{
-		BaseModel: models.BaseModel{ID: "agent"},
+	return &user.ModelUser{
+		BaseModel: base.BaseModel{ID: "agent"},
 		Email:     &email,
 		Roles:     []string{"admin"},
 	}
@@ -231,14 +232,14 @@ func extractTokenFromCookieHeader(cookieHeader string) string {
 }
 
 // setUserInContext adds the authenticated user to the context.
-func setUserInContext(ctx context.Context, user *models.User) context.Context {
+func setUserInContext(ctx context.Context, user *user.ModelUser) context.Context {
 	ctx = context.WithValue(ctx, ContextKeyUserID, user.ID)
 	ctx = context.WithValue(ctx, ContextKeyCurrentUser, user)
 	ctx = context.WithValue(ctx, ContextKeyUserIsAdmin, userHasRole(user, "admin"))
 	return ctx
 }
 
-func userHasRole(user *models.User, role string) bool {
+func userHasRole(user *user.ModelUser, role string) bool {
 	for _, r := range user.Roles {
 		if r == role {
 			return true

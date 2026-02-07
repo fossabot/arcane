@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/types/category"
 	"github.com/getarcaneapp/arcane/types/meta"
@@ -37,13 +36,13 @@ func (s *CustomizeSearchService) GetCustomizeCategories() []category.Category {
 
 func (s *CustomizeSearchService) buildCategoriesFromModel() []category.Category {
 	// Extract category metadata from struct tags (catmeta)
-	catMetaMap := utils.ExtractCategoryMetadata(models.CustomizeItem{}, nil)
+	catMetaMap := utils.ExtractCategoryMetadata(category.CustomizeItem{}, nil)
 
 	// map category id -> list of customizations
 	categories := map[string][]meta.Metadata{}
 	categoryOrder := []string{} // Track order from first appearance in struct
 
-	rt := reflect.TypeOf(models.CustomizeItem{})
+	rt := reflect.TypeOf(category.CustomizeItem{})
 	for i := 0; i < rt.NumField(); i++ {
 		field := rt.Field(i)
 		keyTag := field.Tag.Get("key")

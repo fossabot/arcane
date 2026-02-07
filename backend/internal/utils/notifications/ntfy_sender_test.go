@@ -3,7 +3,7 @@ package notifications
 import (
 	"testing"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
+	"github.com/getarcaneapp/arcane/types/notification"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,13 +11,13 @@ import (
 func TestBuildNtfyURL(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  models.NtfyConfig
+		config  notification.NtfyConfig
 		wantErr bool
 		check   func(string) bool
 	}{
 		{
 			name: "basic config with default host",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Topic:    "test-topic",
 				Cache:    true,
 				Firebase: true,
@@ -29,7 +29,7 @@ func TestBuildNtfyURL(t *testing.T) {
 		},
 		{
 			name: "config with custom host",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host:     "ntfy.example.com",
 				Topic:    "alerts",
 				Cache:    true,
@@ -42,7 +42,7 @@ func TestBuildNtfyURL(t *testing.T) {
 		},
 		{
 			name: "config with port",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host:     "ntfy.example.com",
 				Port:     8080,
 				Topic:    "updates",
@@ -56,7 +56,7 @@ func TestBuildNtfyURL(t *testing.T) {
 		},
 		{
 			name: "config with auth",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host:     "ntfy.example.com",
 				Port:     443,
 				Topic:    "private",
@@ -72,7 +72,7 @@ func TestBuildNtfyURL(t *testing.T) {
 		},
 		{
 			name: "config with priority and tags",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host:     "ntfy.sh",
 				Topic:    "alerts",
 				Priority: "high",
@@ -87,14 +87,14 @@ func TestBuildNtfyURL(t *testing.T) {
 		},
 		{
 			name: "missing topic",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host: "ntfy.sh",
 			},
 			wantErr: true,
 		},
 		{
 			name: "config with all options",
-			config: models.NtfyConfig{
+			config: notification.NtfyConfig{
 				Host:                   "ntfy.example.com",
 				Port:                   8080,
 				Topic:                  "test",

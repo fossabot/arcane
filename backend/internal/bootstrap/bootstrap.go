@@ -28,7 +28,6 @@ func Bootstrap(ctx context.Context) error {
 	cfg := config.Load()
 
 	SetupGinLogger(cfg)
-	ConfigureGormLogger(cfg)
 	slog.InfoContext(ctx, "Arcane is starting", "version", config.Version)
 
 	appCtx, cancelApp := context.WithCancel(ctx)

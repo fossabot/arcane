@@ -43,7 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     tzdata && \
     rm -rf /var/lib/apt/lists/* && \
-    go install github.com/air-verse/air@latest
+    go install github.com/air-verse/air@latest && \
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
 
 ENV GIN_MODE=debug \
     PORT=3552 \

@@ -8,12 +8,10 @@ import (
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/types/jobschedule"
 	"github.com/getarcaneapp/arcane/types/meta"
 	schedulertypes "github.com/getarcaneapp/arcane/types/scheduler"
 	"github.com/robfig/cron/v3"
-	"gorm.io/gorm"
 )
 
 type JobRunner interface {
@@ -29,7 +27,7 @@ type JobRunner interface {
 // NOTE: This is intentionally separate from SettingsService to keep the API
 // surface job-focused and to centralize schedule validation/rescheduling.
 type JobService struct {
-	db        *database.DB
+	store     database.SettingsStore
 	settings  *SettingsService
 	cfg       *config.Config
 	scheduler JobRunner
@@ -37,8 +35,8 @@ type JobService struct {
 	OnJobSchedulesChanged func(ctx context.Context, changedKeys []string)
 }
 
-func NewJobService(db *database.DB, settings *SettingsService, cfg *config.Config) *JobService {
-	return &JobService{db: db, settings: settings, cfg: cfg}
+func NewJobService(store database.SettingsStore, settings *SettingsService, cfg *config.Config) *JobService {
+	return &JobService{store: store, settings: settings, cfg: cfg}
 }
 
 func (s *JobService) SetScheduler(scheduler JobRunner) {
@@ -59,7 +57,7 @@ func (s *JobService) GetJobSchedules(ctx context.Context) jobschedule.Config {
 }
 
 func (s *JobService) UpdateJobSchedules(ctx context.Context, updates jobschedule.Update) (jobschedule.Config, error) {
-	if s == nil || s.db == nil || s.settings == nil {
+	if s == nil || s.store == nil || s.settings == nil {
 		return jobschedule.Config{}, fmt.Errorf("job service not initialized")
 	}
 	if s.cfg != nil && s.cfg.UIConfigurationDisabled {
@@ -95,7 +93,7 @@ func (s *JobService) UpdateJobSchedules(ctx context.Context, updates jobschedule
 
 	changed := false
 	changedKeys := make([]string, 0, 7)
-	upsert := func(tx *gorm.DB, key string, v *string, currentVal string) error {
+	upsert := func(tx database.SettingsStoreTx, key string, v *string, currentVal string) error {
 		if v == nil {
 			return nil
 		}
@@ -104,10 +102,10 @@ func (s *JobService) UpdateJobSchedules(ctx context.Context, updates jobschedule
 		}
 		changed = true
 		changedKeys = append(changedKeys, key)
-		return tx.Save(&models.SettingVariable{Key: key, Value: *v}).Error
+		return tx.UpsertSetting(ctx, key, *v)
 	}
 
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
 		for _, field := range fields {
 			if err := upsert(tx, field.key, field.update, field.current); err != nil {
 				return err

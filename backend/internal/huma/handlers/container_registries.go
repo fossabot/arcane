@@ -6,7 +6,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
@@ -44,7 +43,7 @@ type ListContainerRegistriesOutput struct {
 }
 
 type CreateContainerRegistryInput struct {
-	Body models.CreateContainerRegistryRequest
+	Body containerregistry.CreateContainerRegistryRequest
 }
 
 type CreateContainerRegistryOutput struct {
@@ -61,7 +60,7 @@ type GetContainerRegistryOutput struct {
 
 type UpdateContainerRegistryInput struct {
 	ID   string `path:"id" doc:"Registry ID"`
-	Body models.UpdateContainerRegistryRequest
+	Body containerregistry.UpdateContainerRegistryRequest
 }
 
 type UpdateContainerRegistryOutput struct {
@@ -236,11 +235,11 @@ func (h *ContainerRegistryHandler) CreateRegistry(ctx context.Context, input *Cr
 
 	reg, err := h.registryService.CreateRegistry(ctx, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistryCreationError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.ContainerRegistry, containerregistry.ContainerRegistry](reg)
+	out, mapErr := mapper.MapOne[*containerregistry.ModelContainerRegistry, containerregistry.ContainerRegistry](reg)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.RegistryMappingError{Err: mapErr}).Error())
 	}
@@ -261,11 +260,11 @@ func (h *ContainerRegistryHandler) GetRegistry(ctx context.Context, input *GetCo
 
 	reg, err := h.registryService.GetRegistryByID(ctx, input.ID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistryRetrievalError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.ContainerRegistry, containerregistry.ContainerRegistry](reg)
+	out, mapErr := mapper.MapOne[*containerregistry.ModelContainerRegistry, containerregistry.ContainerRegistry](reg)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.RegistryMappingError{Err: mapErr}).Error())
 	}
@@ -290,11 +289,11 @@ func (h *ContainerRegistryHandler) UpdateRegistry(ctx context.Context, input *Up
 
 	reg, err := h.registryService.UpdateRegistry(ctx, input.ID, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistryUpdateError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.ContainerRegistry, containerregistry.ContainerRegistry](reg)
+	out, mapErr := mapper.MapOne[*containerregistry.ModelContainerRegistry, containerregistry.ContainerRegistry](reg)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.RegistryMappingError{Err: mapErr}).Error())
 	}
@@ -318,7 +317,7 @@ func (h *ContainerRegistryHandler) DeleteRegistry(ctx context.Context, input *De
 	}
 
 	if err := h.registryService.DeleteRegistry(ctx, input.ID); err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistryDeletionError{Err: err}).Error())
 	}
 
@@ -344,7 +343,7 @@ func (h *ContainerRegistryHandler) TestRegistry(ctx context.Context, input *Test
 
 	reg, err := h.registryService.GetRegistryByID(ctx, input.ID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistryRetrievalError{Err: err}).Error())
 	}
 
@@ -379,7 +378,7 @@ func (h *ContainerRegistryHandler) SyncRegistries(ctx context.Context, input *Sy
 	}
 
 	if err := h.registryService.SyncRegistries(ctx, input.Body.Registries); err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.RegistrySyncError{Err: err}).Error())
 	}
 
@@ -397,7 +396,7 @@ func (h *ContainerRegistryHandler) SyncRegistries(ctx context.Context, input *Sy
 // Helper Methods
 // ============================================================================
 
-func (h *ContainerRegistryHandler) performRegistryTest(ctx context.Context, registryModel *models.ContainerRegistry, decryptedToken string) (map[string]interface{}, error) {
+func (h *ContainerRegistryHandler) performRegistryTest(ctx context.Context, registryModel *containerregistry.ModelContainerRegistry, decryptedToken string) (map[string]interface{}, error) {
 	var creds *registry.Credentials
 	if registryModel.Username != "" && decryptedToken != "" {
 		creds = &registry.Credentials{

@@ -5,7 +5,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getarcaneapp/arcane/backend/internal/common"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/services"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/mapper"
 	"github.com/getarcaneapp/arcane/types/base"
@@ -41,7 +40,7 @@ type ListGitRepositoriesOutput struct {
 }
 
 type CreateGitRepositoryInput struct {
-	Body models.CreateGitRepositoryRequest
+	Body gitops.CreateGitRepositoryRequest
 }
 
 type CreateGitRepositoryOutput struct {
@@ -58,7 +57,7 @@ type GetGitRepositoryOutput struct {
 
 type UpdateGitRepositoryInput struct {
 	ID   string `path:"id" doc:"Repository ID"`
-	Body models.UpdateGitRepositoryRequest
+	Body gitops.UpdateGitRepositoryRequest
 }
 
 type UpdateGitRepositoryOutput struct {
@@ -274,11 +273,11 @@ func (h *GitRepositoryHandler) CreateRepository(ctx context.Context, input *Crea
 
 	repo, err := h.repoService.CreateRepository(ctx, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitRepositoryCreationError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitRepository, gitops.GitRepository](repo)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitRepository, gitops.GitRepository](repo)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitRepositoryMappingError{Err: mapErr}).Error())
 	}
@@ -299,11 +298,11 @@ func (h *GitRepositoryHandler) GetRepository(ctx context.Context, input *GetGitR
 
 	repo, err := h.repoService.GetRepositoryByID(ctx, input.ID)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitRepositoryRetrievalError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitRepository, gitops.GitRepository](repo)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitRepository, gitops.GitRepository](repo)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitRepositoryMappingError{Err: mapErr}).Error())
 	}
@@ -324,11 +323,11 @@ func (h *GitRepositoryHandler) UpdateRepository(ctx context.Context, input *Upda
 
 	repo, err := h.repoService.UpdateRepository(ctx, input.ID, input.Body)
 	if err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitRepositoryUpdateError{Err: err}).Error())
 	}
 
-	out, mapErr := mapper.MapOne[*models.GitRepository, gitops.GitRepository](repo)
+	out, mapErr := mapper.MapOne[*gitops.ModelGitRepository, gitops.GitRepository](repo)
 	if mapErr != nil {
 		return nil, huma.Error500InternalServerError((&common.GitRepositoryMappingError{Err: mapErr}).Error())
 	}
@@ -348,7 +347,7 @@ func (h *GitRepositoryHandler) DeleteRepository(ctx context.Context, input *Dele
 	}
 
 	if err := h.repoService.DeleteRepository(ctx, input.ID); err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitRepositoryDeletionError{Err: err}).Error())
 	}
 
@@ -437,7 +436,7 @@ func (h *GitRepositoryHandler) SyncRepositories(ctx context.Context, input *Sync
 	}
 
 	if err := h.repoService.SyncRepositories(ctx, input.Body.Repositories); err != nil {
-		apiErr := models.ToAPIError(err)
+		apiErr := base.ToAPIError(err)
 		return nil, huma.NewError(apiErr.HTTPStatus(), (&common.GitRepositorySyncError{Err: err}).Error())
 	}
 

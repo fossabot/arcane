@@ -52,6 +52,12 @@ func filterFn[T any](items []T, filters map[string]string, accessors []FilterAcc
 
 func itemMatches[T any](item T, filters map[string]string, accessors []FilterAccessor[T]) bool {
 	for key, value := range filters {
+		value = strings.TrimSpace(value)
+		// Empty filter values should be treated as "no filter" for that key.
+		if value == "" {
+			continue
+		}
+
 		accessor := getAccessor(key, accessors)
 		if accessor == nil {
 			return false
@@ -76,11 +82,19 @@ func getAccessor[T any](key string, accessors []FilterAccessor[T]) *FilterAccess
 func matchValue[T any](item T, value string, accessor *FilterAccessor[T]) bool {
 	if strings.Contains(value, ",") {
 		values := strings.Split(value, ",")
+		seenNonEmpty := false
 		for _, v := range values {
 			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			seenNonEmpty = true
 			if accessor.Fn(item, v) {
 				return true
 			}
+		}
+		if !seenNonEmpty {
+			return true
 		}
 		return false
 	}

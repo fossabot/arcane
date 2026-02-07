@@ -106,6 +106,32 @@ jobs:
           working-directory: ${{ matrix.module.name }}
           only-new-issues: false
 
+  sqlc-check:
+    name: SQLC Generation Check
+    runs-on: depot-ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Setup Just
+        uses: extractions/setup-just@v3
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
+      - name: Generate sqlc code
+        run: just sqlc
+
+      - name: Ensure generated code is committed
+        run: git diff --exit-code
+
   deadcode:
     name: Go Deadcode Analysis
     if: github.event.pull_request.head.repo.owner.login == 'getarcaneapp'

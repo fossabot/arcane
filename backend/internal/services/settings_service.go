@@ -19,19 +19,17 @@ import (
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/robfig/cron/v3"
-	"gorm.io/gorm"
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/pathmapper"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/stringutils"
 	"github.com/getarcaneapp/arcane/types/settings"
 )
 
 type SettingsService struct {
-	db     *database.DB
-	config atomic.Pointer[models.Settings]
+	store  database.SettingsStore
+	config atomic.Pointer[settings.Settings]
 
 	OnImagePollingSettingsChanged   func(ctx context.Context)
 	OnAutoUpdateSettingsChanged     func(ctx context.Context)
@@ -40,9 +38,9 @@ type SettingsService struct {
 	OnTimeoutSettingsChanged        func(ctx context.Context, timeoutSettings map[string]string)
 }
 
-func NewSettingsService(ctx context.Context, db *database.DB) (*SettingsService, error) {
+func NewSettingsService(ctx context.Context, store database.SettingsStore) (*SettingsService, error) {
 	svc := &SettingsService{
-		db: db,
+		store: store,
 	}
 
 	err := svc.LoadDatabaseSettings(ctx)
@@ -62,7 +60,7 @@ func NewSettingsService(ctx context.Context, db *database.DB) (*SettingsService,
 	return svc, nil
 }
 
-func (s *SettingsService) GetSettingsConfig() *models.Settings {
+func (s *SettingsService) GetSettingsConfig() *settings.Settings {
 	v := s.config.Load()
 	if v == nil {
 		panic("GetSettingsConfig called before Settings has been loaded")
@@ -72,7 +70,7 @@ func (s *SettingsService) GetSettingsConfig() *models.Settings {
 }
 
 func (s *SettingsService) LoadDatabaseSettings(ctx context.Context) (err error) {
-	dst, err := s.loadDatabaseSettingsInternal(ctx, s.db)
+	dst, err := s.loadDatabaseSettingsInternal(ctx)
 	if err != nil {
 		return err
 	}
@@ -82,83 +80,80 @@ func (s *SettingsService) LoadDatabaseSettings(ctx context.Context) (err error) 
 	return nil
 }
 
-func (s *SettingsService) getDefaultSettings() *models.Settings {
-	return &models.Settings{
-		ProjectsDirectory:          models.SettingVariable{Value: "/app/data/projects"},
-		DiskUsagePath:              models.SettingVariable{Value: "/app/data/projects"},
-		AutoUpdate:                 models.SettingVariable{Value: "false"},
-		AutoUpdateInterval:         models.SettingVariable{Value: "0 0 0 * * *"},
-		PollingEnabled:             models.SettingVariable{Value: "true"},
-		PollingInterval:            models.SettingVariable{Value: "0 0 * * * *"},
-		EventCleanupInterval:       models.SettingVariable{Value: "0 0 */6 * * *"},
-		AnalyticsHeartbeatInterval: models.SettingVariable{Value: "0 0 0 * * *"},
-		AutoInjectEnv:              models.SettingVariable{Value: "false"},
-		PruneMode:                  models.SettingVariable{Value: "dangling"},
-		ScheduledPruneEnabled:      models.SettingVariable{Value: "false"},
-		ScheduledPruneInterval:     models.SettingVariable{Value: "0 0 0 * * *"},
-		ScheduledPruneContainers:   models.SettingVariable{Value: "true"},
-		ScheduledPruneImages:       models.SettingVariable{Value: "true"},
-		ScheduledPruneVolumes:      models.SettingVariable{Value: "false"},
-		ScheduledPruneNetworks:     models.SettingVariable{Value: "true"},
-		ScheduledPruneBuildCache:   models.SettingVariable{Value: "false"},
-		BaseServerURL:              models.SettingVariable{Value: "http://localhost"},
-		EnableGravatar:             models.SettingVariable{Value: "true"},
-		DefaultShell:               models.SettingVariable{Value: "/bin/sh"},
-		DockerHost:                 models.SettingVariable{Value: "unix:///var/run/docker.sock"},
-		AuthLocalEnabled:           models.SettingVariable{Value: "true"},
-		AuthSessionTimeout:         models.SettingVariable{Value: "1440"},
-		AuthPasswordPolicy:         models.SettingVariable{Value: "strong"},
+func (s *SettingsService) getDefaultSettings() *settings.Settings {
+	return &settings.Settings{
+		ProjectsDirectory:          settings.SettingVariable{Value: "/app/data/projects"},
+		DiskUsagePath:              settings.SettingVariable{Value: "/app/data/projects"},
+		AutoUpdate:                 settings.SettingVariable{Value: "false"},
+		AutoUpdateInterval:         settings.SettingVariable{Value: "0 0 0 * * *"},
+		PollingEnabled:             settings.SettingVariable{Value: "true"},
+		PollingInterval:            settings.SettingVariable{Value: "0 0 * * * *"},
+		EventCleanupInterval:       settings.SettingVariable{Value: "0 0 */6 * * *"},
+		AnalyticsHeartbeatInterval: settings.SettingVariable{Value: "0 0 0 * * *"},
+		AutoInjectEnv:              settings.SettingVariable{Value: "false"},
+		PruneMode:                  settings.SettingVariable{Value: "dangling"},
+		ScheduledPruneEnabled:      settings.SettingVariable{Value: "false"},
+		ScheduledPruneInterval:     settings.SettingVariable{Value: "0 0 0 * * *"},
+		ScheduledPruneContainers:   settings.SettingVariable{Value: "true"},
+		ScheduledPruneImages:       settings.SettingVariable{Value: "true"},
+		ScheduledPruneVolumes:      settings.SettingVariable{Value: "false"},
+		ScheduledPruneNetworks:     settings.SettingVariable{Value: "true"},
+		ScheduledPruneBuildCache:   settings.SettingVariable{Value: "false"},
+		BaseServerURL:              settings.SettingVariable{Value: "http://localhost"},
+		EnableGravatar:             settings.SettingVariable{Value: "true"},
+		DefaultShell:               settings.SettingVariable{Value: "/bin/sh"},
+		DockerHost:                 settings.SettingVariable{Value: "unix:///var/run/docker.sock"},
+		AuthLocalEnabled:           settings.SettingVariable{Value: "true"},
+		AuthSessionTimeout:         settings.SettingVariable{Value: "1440"},
+		AuthPasswordPolicy:         settings.SettingVariable{Value: "strong"},
 		// AuthOidcConfig DEPRECATED will be removed in a future release
-		AuthOidcConfig:             models.SettingVariable{Value: "{}"},
-		OidcEnabled:                models.SettingVariable{Value: "false"},
-		OidcClientId:               models.SettingVariable{Value: ""},
-		OidcClientSecret:           models.SettingVariable{Value: ""},
-		OidcIssuerUrl:              models.SettingVariable{Value: ""},
-		OidcAuthorizationEndpoint:  models.SettingVariable{Value: ""},
-		OidcTokenEndpoint:          models.SettingVariable{Value: ""},
-		OidcUserinfoEndpoint:       models.SettingVariable{Value: ""},
-		OidcJwksEndpoint:           models.SettingVariable{Value: ""},
-		OidcScopes:                 models.SettingVariable{Value: "openid email profile"},
-		OidcAdminClaim:             models.SettingVariable{Value: ""},
-		OidcAdminValue:             models.SettingVariable{Value: ""},
-		OidcSkipTlsVerify:          models.SettingVariable{Value: "false"},
-		OidcAutoRedirectToProvider: models.SettingVariable{Value: "false"},
-		OidcMergeAccounts:          models.SettingVariable{Value: "false"},
-		OidcProviderName:           models.SettingVariable{Value: ""},
-		OidcProviderLogoUrl:        models.SettingVariable{Value: ""},
-		MobileNavigationMode:       models.SettingVariable{Value: "floating"},
-		MobileNavigationShowLabels: models.SettingVariable{Value: "true"},
-		SidebarHoverExpansion:      models.SettingVariable{Value: "true"},
-		KeyboardShortcutsEnabled:   models.SettingVariable{Value: "true"},
-		AccentColor:                models.SettingVariable{Value: "oklch(0.606 0.25 292.717)"},
-		MaxImageUploadSize:         models.SettingVariable{Value: "500"},
-		EnvironmentHealthInterval:  models.SettingVariable{Value: "0 */2 * * * *"},
+		AuthOidcConfig:             settings.SettingVariable{Value: "{}"},
+		OidcEnabled:                settings.SettingVariable{Value: "false"},
+		OidcClientId:               settings.SettingVariable{Value: ""},
+		OidcClientSecret:           settings.SettingVariable{Value: ""},
+		OidcIssuerUrl:              settings.SettingVariable{Value: ""},
+		OidcAuthorizationEndpoint:  settings.SettingVariable{Value: ""},
+		OidcTokenEndpoint:          settings.SettingVariable{Value: ""},
+		OidcUserinfoEndpoint:       settings.SettingVariable{Value: ""},
+		OidcJwksEndpoint:           settings.SettingVariable{Value: ""},
+		OidcScopes:                 settings.SettingVariable{Value: "openid email profile"},
+		OidcAdminClaim:             settings.SettingVariable{Value: ""},
+		OidcAdminValue:             settings.SettingVariable{Value: ""},
+		OidcSkipTlsVerify:          settings.SettingVariable{Value: "false"},
+		OidcAutoRedirectToProvider: settings.SettingVariable{Value: "false"},
+		OidcMergeAccounts:          settings.SettingVariable{Value: "false"},
+		OidcProviderName:           settings.SettingVariable{Value: ""},
+		OidcProviderLogoUrl:        settings.SettingVariable{Value: ""},
+		MobileNavigationMode:       settings.SettingVariable{Value: "floating"},
+		MobileNavigationShowLabels: settings.SettingVariable{Value: "true"},
+		SidebarHoverExpansion:      settings.SettingVariable{Value: "true"},
+		KeyboardShortcutsEnabled:   settings.SettingVariable{Value: "true"},
+		AccentColor:                settings.SettingVariable{Value: "oklch(0.606 0.25 292.717)"},
+		MaxImageUploadSize:         settings.SettingVariable{Value: "500"},
+		EnvironmentHealthInterval:  settings.SettingVariable{Value: "0 */2 * * * *"},
 
-		DockerAPITimeout:       models.SettingVariable{Value: "30"},
-		DockerImagePullTimeout: models.SettingVariable{Value: "600"},
-		GitOperationTimeout:    models.SettingVariable{Value: "300"},
-		HTTPClientTimeout:      models.SettingVariable{Value: "30"},
-		RegistryTimeout:        models.SettingVariable{Value: "30"},
-		ProxyRequestTimeout:    models.SettingVariable{Value: "60"},
+		DockerAPITimeout:       settings.SettingVariable{Value: "30"},
+		DockerImagePullTimeout: settings.SettingVariable{Value: "600"},
+		GitOperationTimeout:    settings.SettingVariable{Value: "300"},
+		HTTPClientTimeout:      settings.SettingVariable{Value: "30"},
+		RegistryTimeout:        settings.SettingVariable{Value: "30"},
+		ProxyRequestTimeout:    settings.SettingVariable{Value: "60"},
 
-		InstanceID: models.SettingVariable{Value: ""},
+		InstanceID: settings.SettingVariable{Value: ""},
 	}
 }
 
-func (s *SettingsService) loadDatabaseSettingsInternal(ctx context.Context, db *database.DB) (*models.Settings, error) {
+func (s *SettingsService) loadDatabaseSettingsInternal(ctx context.Context) (*settings.Settings, error) {
 	if config.Load().UIConfigurationDisabled || config.Load().AgentMode {
 		slog.DebugContext(ctx, "loadDatabaseSettingsInternal: using env path", "UIConfigurationDisabled", config.Load().UIConfigurationDisabled, "AgentMode", config.Load().AgentMode, "Environment", config.Load().Environment)
-		return s.loadDatabaseConfigFromEnv(ctx, db)
+		return s.loadDatabaseConfigFromEnv(ctx)
 	}
 
 	dest := s.getDefaultSettings()
 
-	var loaded []models.SettingVariable
 	queryCtx, queryCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer queryCancel()
-	err := db.
-		WithContext(queryCtx).
-		Find(&loaded).Error
+	loaded, err := s.store.ListSettings(queryCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration from the database: %w", err)
 	}
@@ -166,7 +161,7 @@ func (s *SettingsService) loadDatabaseSettingsInternal(ctx context.Context, db *
 	for _, v := range loaded {
 		err = dest.UpdateField(v.Key, v.Value, false)
 
-		if err != nil && !errors.Is(err, models.SettingKeyNotFoundError{}) {
+		if err != nil && !errors.Is(err, settings.SettingKeyNotFoundError{}) {
 			return nil, fmt.Errorf("failed to process settings for key '%s': %w", v.Key, err)
 		}
 	}
@@ -177,12 +172,12 @@ func (s *SettingsService) loadDatabaseSettingsInternal(ctx context.Context, db *
 	return dest, nil
 }
 
-func (s *SettingsService) loadDatabaseConfigFromEnv(ctx context.Context, db *database.DB) (*models.Settings, error) {
+func (s *SettingsService) loadDatabaseConfigFromEnv(ctx context.Context) (*settings.Settings, error) {
 	dest := s.getDefaultSettings()
 
 	// Fetch all settings once to avoid N+1 queries for internal keys
-	var allSettings []models.SettingVariable
-	if err := db.WithContext(ctx).Find(&allSettings).Error; err != nil {
+	allSettings, err := s.store.ListSettings(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("failed to load settings for env config: %w", err)
 	}
 	settingsMap := make(map[string]string, len(allSettings))
@@ -246,7 +241,7 @@ func (s *SettingsService) loadDatabaseConfigFromEnv(ctx context.Context, db *dat
 	return dest, nil
 }
 
-func (s *SettingsService) applyEnvOverrides(ctx context.Context, dest *models.Settings) {
+func (s *SettingsService) applyEnvOverrides(ctx context.Context, dest *settings.Settings) {
 	rt := reflect.ValueOf(dest).Elem().Type()
 	rv := reflect.ValueOf(dest).Elem()
 
@@ -281,18 +276,17 @@ func (s *SettingsService) applyEnvOverrides(ctx context.Context, dest *models.Se
 	}
 }
 
-func (s *SettingsService) GetSettings(ctx context.Context) (*models.Settings, error) {
-	var settingVars []models.SettingVariable
-	err := s.db.WithContext(ctx).Find(&settingVars).Error
+func (s *SettingsService) GetSettings(ctx context.Context) (*settings.Settings, error) {
+	settingVars, err := s.store.ListSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	settings := &models.Settings{}
+	cfgSettings := &settings.Settings{}
 
 	for _, sv := range settingVars {
-		if err := settings.UpdateField(sv.Key, sv.Value, false); err != nil {
-			var notFoundErr models.SettingKeyNotFoundError
+		if err := cfgSettings.UpdateField(sv.Key, sv.Value, false); err != nil {
+			var notFoundErr settings.SettingKeyNotFoundError
 			if !errors.As(err, &notFoundErr) {
 				return nil, fmt.Errorf("failed to load setting %s: %w", sv.Key, err)
 			}
@@ -302,9 +296,9 @@ func (s *SettingsService) GetSettings(ctx context.Context) (*models.Settings, er
 	// Apply environment variable overrides for fields tagged with "envOverride".
 	// This keeps behavior consistent with the cached settings path (LoadDatabaseSettingsInternal)
 	// and allows env vars like OIDC_MERGE_ACCOUNTS to affect runtime behavior.
-	s.applyEnvOverrides(ctx, settings)
+	s.applyEnvOverrides(ctx, cfgSettings)
 
-	return settings, nil
+	return cfgSettings, nil
 }
 
 // MigrateOidcConfigToFields migrates the legacy JSON authOidcConfig to individual fields,
@@ -334,7 +328,7 @@ func (s *SettingsService) MigrateOidcConfigToFields(ctx context.Context) error {
 		return nil
 	}
 
-	var oidcConfig models.OidcConfig
+	var oidcConfig settings.OidcConfig
 	if err := json.Unmarshal([]byte(currentSettings.AuthOidcConfig.Value), &oidcConfig); err != nil {
 		slog.WarnContext(ctx, "Failed to parse legacy OIDC config for migration", "error", err)
 		return nil
@@ -382,30 +376,31 @@ func (s *SettingsService) migrateOidcKeyNames(ctx context.Context) error {
 		"authOidcAdminValue":    "oidcAdminValue",
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
 		for oldKey, newKey := range keyMappings {
 			// Check if old key exists
-			var oldSetting models.SettingVariable
-			if err := tx.Where("key = ?", oldKey).First(&oldSetting).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					continue // Old key doesn't exist, nothing to migrate
-				}
+			oldSetting, err := tx.GetSetting(ctx, oldKey)
+			if err != nil {
 				return fmt.Errorf("failed to check old key %s: %w", oldKey, err)
+			}
+			if oldSetting == nil {
+				continue
 			}
 
 			// Check if new key already exists
-			var newSetting models.SettingVariable
-			if err := tx.Where("key = ?", newKey).First(&newSetting).Error; err == nil {
-				// New key already exists, delete the old one
-				if err := tx.Delete(&oldSetting).Error; err != nil {
+			newSetting, err := tx.GetSetting(ctx, newKey)
+			if err != nil {
+				return fmt.Errorf("failed to check new key %s: %w", newKey, err)
+			}
+			if newSetting != nil {
+				if err := tx.DeleteSetting(ctx, oldKey); err != nil {
 					return fmt.Errorf("failed to delete old key %s: %w", oldKey, err)
 				}
 				slog.DebugContext(ctx, "Deleted duplicate legacy key", "oldKey", oldKey, "newKey", newKey)
 				continue
 			}
 
-			// Rename: update key from old to new
-			if err := tx.Model(&oldSetting).Update("key", newKey).Error; err != nil {
+			if err := tx.UpdateSettingKey(ctx, oldKey, newKey); err != nil {
 				return fmt.Errorf("failed to rename key %s to %s: %w", oldKey, newKey, err)
 			}
 			slog.InfoContext(ctx, "Migrated OIDC setting key", "oldKey", oldKey, "newKey", newKey)
@@ -415,16 +410,10 @@ func (s *SettingsService) migrateOidcKeyNames(ctx context.Context) error {
 }
 
 func (s *SettingsService) UpdateSetting(ctx context.Context, key, value string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		settingVar := &models.SettingVariable{
-			Key:   key,
-			Value: value,
-		}
-		return tx.Save(settingVar).Error
-	})
+	return s.store.UpsertSetting(ctx, key, value)
 }
 
-func (s *SettingsService) UpdateSettings(ctx context.Context, updates settings.Update) ([]models.SettingVariable, error) {
+func (s *SettingsService) UpdateSettings(ctx context.Context, updates settings.Update) ([]settings.SettingVariable, error) {
 	defaultCfg := s.getDefaultSettings()
 	cfg, err := s.GetSettings(ctx)
 	if err != nil {
@@ -445,12 +434,12 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, updates settings.U
 	}
 
 	// Reload and store settings BEFORE calling callbacks so they read updated values
-	settings, err := s.GetSettings(ctx)
+	updatedSettings, err := s.GetSettings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve updated settings: %w", err)
 	}
 
-	s.config.Store(settings)
+	s.config.Store(updatedSettings)
 
 	// Now call callbacks after in-memory config is updated
 	if changedPolling && s.OnImagePollingSettingsChanged != nil {
@@ -462,14 +451,14 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, updates settings.U
 	if changedScheduledPrune && s.OnScheduledPruneSettingsChanged != nil {
 		s.OnScheduledPruneSettingsChanged(ctx)
 	}
-	if slices.ContainsFunc(valuesToUpdate, func(sv models.SettingVariable) bool { return sv.Key == "projectsDirectory" }) && s.OnProjectsDirectoryChanged != nil {
+	if slices.ContainsFunc(valuesToUpdate, func(sv settings.SettingVariable) bool { return sv.Key == "projectsDirectory" }) && s.OnProjectsDirectoryChanged != nil {
 		s.OnProjectsDirectoryChanged(ctx)
 	}
 	if len(changedTimeouts) > 0 && s.OnTimeoutSettingsChanged != nil {
 		s.OnTimeoutSettingsChanged(ctx, changedTimeouts)
 	}
 
-	return settings.ToSettingVariableSlice(false, false), nil
+	return updatedSettings.ToSettingVariableSlice(false, false), nil
 }
 
 // timeoutSettingKeys defines the keys for timeout settings that should be synced to agents
@@ -482,10 +471,10 @@ var timeoutSettingKeys = []string{
 	"proxyRequestTimeout",
 }
 
-func (s *SettingsService) prepareUpdateValues(updates settings.Update, cfg, defaultCfg *models.Settings) ([]models.SettingVariable, bool, bool, bool, map[string]string, error) {
+func (s *SettingsService) prepareUpdateValues(updates settings.Update, cfg, defaultCfg *settings.Settings) ([]settings.SettingVariable, bool, bool, bool, map[string]string, error) {
 	rt := reflect.TypeOf(updates)
 	rv := reflect.ValueOf(updates)
-	valuesToUpdate := make([]models.SettingVariable, 0)
+	valuesToUpdate := make([]settings.SettingVariable, 0)
 
 	changedPolling := false
 	changedAutoUpdate := false
@@ -526,13 +515,13 @@ func (s *SettingsService) prepareUpdateValues(updates settings.Update, cfg, defa
 			err = cfg.UpdateField(key, value, true)
 		}
 
-		if errors.Is(err, models.SettingSensitiveForbiddenError{}) {
+		if errors.Is(err, settings.SettingSensitiveForbiddenError{}) {
 			continue
 		} else if err != nil {
 			return nil, false, false, false, nil, fmt.Errorf("failed to update in-memory config for key '%s': %w", key, err)
 		}
 
-		valuesToUpdate = append(valuesToUpdate, models.SettingVariable{
+		valuesToUpdate = append(valuesToUpdate, settings.SettingVariable{
 			Key:   key,
 			Value: valueToSave,
 		})
@@ -555,10 +544,10 @@ func (s *SettingsService) prepareUpdateValues(updates settings.Update, cfg, defa
 	return valuesToUpdate, changedPolling, changedAutoUpdate, changedScheduledPrune, changedTimeouts, nil
 }
 
-func (s *SettingsService) persistSettings(ctx context.Context, values []models.SettingVariable) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+func (s *SettingsService) persistSettings(ctx context.Context, values []settings.SettingVariable) error {
+	return s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
 		for _, setting := range values {
-			if err := tx.Save(&setting).Error; err != nil {
+			if err := tx.UpsertSetting(ctx, setting.Key, setting.Value); err != nil {
 				return fmt.Errorf("failed to update setting %s: %w", setting.Key, err)
 			}
 		}
@@ -570,7 +559,7 @@ func (s *SettingsService) handleOidcConfigUpdate(ctx context.Context, updates se
 	// Handle legacy JSON config format (for backward compatibility during migration)
 	if updates.AuthOidcConfig != nil {
 		newCfgStr := *updates.AuthOidcConfig
-		var incoming models.OidcConfig
+		var incoming settings.OidcConfig
 		if err := json.Unmarshal([]byte(newCfgStr), &incoming); err != nil {
 			return fmt.Errorf("invalid authOidcConfig JSON: %w", err)
 		}
@@ -581,7 +570,7 @@ func (s *SettingsService) handleOidcConfigUpdate(ctx context.Context, updates se
 		}
 
 		if current.AuthOidcConfig.Value != "" {
-			var existing models.OidcConfig
+			var existing settings.OidcConfig
 			if err := json.Unmarshal([]byte(current.AuthOidcConfig.Value), &existing); err == nil {
 				if incoming.ClientSecret == "" {
 					incoming.ClientSecret = existing.ClientSecret
@@ -627,17 +616,10 @@ func (s *SettingsService) EnsureDefaultSettings(ctx context.Context) error {
 	defaultSettings := s.getDefaultSettings()
 	defaultSettingVars := defaultSettings.ToSettingVariableSlice(true, false)
 
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
 		for _, defaultSetting := range defaultSettingVars {
-			var existing models.SettingVariable
-			err := tx.Where("key = ?", defaultSetting.Key).First(&existing).Error
-
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if err := tx.Create(&defaultSetting).Error; err != nil {
-					return fmt.Errorf("failed to create default setting %s: %w", defaultSetting.Key, err)
-				}
-			} else if err != nil {
-				return fmt.Errorf("failed to check for existing setting %s: %w", defaultSetting.Key, err)
+			if err := tx.InsertSettingIfNotExists(ctx, defaultSetting.Key, defaultSetting.Value); err != nil {
+				return fmt.Errorf("failed to create default setting %s: %w", defaultSetting.Key, err)
 			}
 		}
 		return nil
@@ -659,24 +641,24 @@ func (s *SettingsService) PruneUnknownSettings(ctx context.Context) error {
 		keys = append(keys, key)
 	}
 
-	result := s.db.WithContext(ctx).Where("key NOT IN ?", keys).Delete(&models.SettingVariable{})
-	if result.Error != nil {
-		return fmt.Errorf("failed to prune unknown settings: %w", result.Error)
+	rowsAffected, err := s.store.DeleteSettingsNotIn(ctx, keys)
+	if err != nil {
+		return fmt.Errorf("failed to prune unknown settings: %w", err)
 	}
 
-	if result.RowsAffected > 0 {
-		slog.InfoContext(ctx, "Pruned unknown settings", "count", result.RowsAffected)
+	if rowsAffected > 0 {
+		slog.InfoContext(ctx, "Pruned unknown settings", "count", rowsAffected)
 	}
 
 	return nil
 }
 
 func (s *SettingsService) PersistEnvSettingsIfMissing(ctx context.Context) error {
-	rt := reflect.TypeOf(models.Settings{})
+	rt := reflect.TypeOf(settings.Settings{})
 	appCfg := config.Load()
 	isEnvOnlyMode := appCfg.AgentMode || appCfg.UIConfigurationDisabled
 
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
 		for i := 0; i < rt.NumField(); i++ {
 			field := rt.Field(i)
 			if err := s.processEnvField(ctx, tx, field, isEnvOnlyMode); err != nil {
@@ -695,7 +677,7 @@ func (s *SettingsService) PersistEnvSettingsIfMissing(ctx context.Context) error
 func allowedSettingKeys() map[string]struct{} {
 	allowed := make(map[string]struct{})
 
-	settingsType := reflect.TypeOf(models.Settings{})
+	settingsType := reflect.TypeOf(settings.Settings{})
 	for i := 0; i < settingsType.NumField(); i++ {
 		key, _, _ := strings.Cut(settingsType.Field(i).Tag.Get("key"), ",")
 		if key == "" {
@@ -709,7 +691,7 @@ func allowedSettingKeys() map[string]struct{} {
 	return allowed
 }
 
-func (s *SettingsService) processEnvField(ctx context.Context, tx *gorm.DB, field reflect.StructField, isEnvOnlyMode bool) error {
+func (s *SettingsService) processEnvField(ctx context.Context, tx database.SettingsStoreTx, field reflect.StructField, isEnvOnlyMode bool) error {
 	tag := field.Tag.Get("key")
 	key, attrs, _ := strings.Cut(tag, ",")
 
@@ -740,38 +722,34 @@ func (s *SettingsService) shouldProcessField(key, attrs string, isEnvOnlyMode bo
 	return true
 }
 
-func (s *SettingsService) upsertEnvSetting(ctx context.Context, tx *gorm.DB, key, envVal string) error {
-	var existing models.SettingVariable
-	err := tx.Where("key = ?", key).First(&existing).Error
-
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		newVar := models.SettingVariable{Key: key, Value: envVal}
-		if err := tx.Create(&newVar).Error; err != nil {
+func (s *SettingsService) upsertEnvSetting(ctx context.Context, tx database.SettingsStoreTx, key, envVal string) error {
+	existing, err := tx.GetSetting(ctx, key)
+	if err != nil {
+		return fmt.Errorf("check setting %s: %w", key, err)
+	}
+	if existing == nil {
+		if err := tx.UpsertSetting(ctx, key, envVal); err != nil {
 			return fmt.Errorf("persist env setting %s: %w", key, err)
 		}
 		slog.DebugContext(ctx, "Created setting from environment", "key", key)
-	case err != nil:
-		return fmt.Errorf("check setting %s: %w", key, err)
-	default:
-		if existing.Value != envVal {
-			if err := tx.Model(&existing).Update("value", envVal).Error; err != nil {
-				return fmt.Errorf("update env setting %s: %w", key, err)
-			}
-			slog.DebugContext(ctx, "Updated setting from environment", "key", key)
-		}
+		return nil
 	}
-
+	if existing.Value != envVal {
+		if err := tx.UpsertSetting(ctx, key, envVal); err != nil {
+			return fmt.Errorf("update env setting %s: %w", key, err)
+		}
+		slog.DebugContext(ctx, "Updated setting from environment", "key", key)
+	}
 	return nil
 }
 
-func (s *SettingsService) ListSettings(all bool) []models.SettingVariable {
+func (s *SettingsService) ListSettings(all bool) []settings.SettingVariable {
 	return s.GetSettingsConfig().ToSettingVariableSlice(all, true)
 }
 
 // GetSettingType returns the type from the setting metadata
 func (s *SettingsService) GetSettingType(key string) string {
-	rt := reflect.TypeOf(models.Settings{})
+	rt := reflect.TypeOf(settings.Settings{})
 	for i := 0; i < rt.NumField(); i++ {
 		field := rt.Field(i)
 		keyTag := field.Tag.Get("key")
@@ -879,23 +857,17 @@ func (s *SettingsService) EnsureEncryptionKey(ctx context.Context) (string, erro
 	const keyName = "encryptionKey"
 	var key string
 
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sv models.SettingVariable
-		err := tx.Where("key = ?", keyName).First(&sv).Error
-
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	err := s.store.WithSettingsTx(ctx, func(tx database.SettingsStoreTx) error {
+		sv, err := tx.GetSetting(ctx, keyName)
+		if err != nil {
 			return fmt.Errorf("failed to load encryption key: %w", err)
 		}
 
-		// If already present and non-empty, return it
-		if sv.Value != "" {
+		if sv != nil && sv.Value != "" {
 			key = sv.Value
 			return nil
 		}
 
-		notFound := errors.Is(err, gorm.ErrRecordNotFound)
-
-		// Generate uuid -> sha256 -> base64 key (32 bytes raw -> 44 chars base64)
 		u, genErr := uuid.GenerateUUID()
 		if genErr != nil {
 			return fmt.Errorf("failed to generate encryption key: %w", genErr)
@@ -904,18 +876,8 @@ func (s *SettingsService) EnsureEncryptionKey(ctx context.Context) (string, erro
 		generatedKey := base64.StdEncoding.EncodeToString(sum[:])
 		key = generatedKey
 
-		if notFound {
-			if createErr := tx.Create(&models.SettingVariable{Key: keyName, Value: generatedKey}).Error; createErr != nil {
-				return fmt.Errorf("failed to persist encryption key: %w", createErr)
-			}
-			return nil
-		}
-
-		// Record existed but empty value; update it
-		if updErr := tx.Model(&models.SettingVariable{}).
-			Where("key = ?", keyName).
-			Update("value", generatedKey).Error; updErr != nil {
-			return fmt.Errorf("failed to update encryption key: %w", updErr)
+		if err := tx.UpsertSetting(ctx, keyName, generatedKey); err != nil {
+			return fmt.Errorf("failed to persist encryption key: %w", err)
 		}
 		return nil
 	})
@@ -933,16 +895,14 @@ func (s *SettingsService) NormalizeProjectsDirectory(ctx context.Context, projec
 		return nil
 	}
 
-	var projectsDirSetting models.SettingVariable
-	err := s.db.WithContext(ctx).Where("key = ?", "projectsDirectory").First(&projectsDirSetting).Error
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		slog.DebugContext(ctx, "No projectsDirectory setting found, skipping normalization")
-		return nil
-	}
-
+	projectsDirSetting, err := s.store.GetSetting(ctx, "projectsDirectory")
 	if err != nil {
 		return fmt.Errorf("failed to load projectsDirectory setting: %w", err)
+	}
+
+	if projectsDirSetting == nil {
+		slog.DebugContext(ctx, "No projectsDirectory setting found, skipping normalization")
+		return nil
 	}
 
 	value := strings.TrimSpace(projectsDirSetting.Value)

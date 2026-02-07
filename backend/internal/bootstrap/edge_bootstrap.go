@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/edge"
+	"github.com/getarcaneapp/arcane/types/environment"
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,13 +31,13 @@ func registerEdgeTunnelRoutes(ctx context.Context, apiGroup *gin.RouterGroup, ap
 	statusCallback := func(ctx context.Context, envID string, connected bool) {
 		var status string
 		if connected {
-			status = string(models.EnvironmentStatusOnline)
+			status = string(environment.EnvironmentStatusOnline)
 			// Update heartbeat when connecting
 			if err := appServices.Environment.UpdateEnvironmentHeartbeat(ctx, envID); err != nil {
 				slog.WarnContext(ctx, "Failed to update heartbeat on edge connect", "environment_id", envID, "error", err)
 			}
 		} else {
-			status = string(models.EnvironmentStatusOffline)
+			status = string(environment.EnvironmentStatusOffline)
 		}
 
 		updates := map[string]interface{}{

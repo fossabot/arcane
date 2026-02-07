@@ -12,8 +12,8 @@ import (
 
 	ref "go.podman.io/image/v5/docker/reference"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils/crypto"
+	"github.com/getarcaneapp/arcane/types/containerregistry"
 )
 
 type Credentials struct {
@@ -159,7 +159,7 @@ func AcquireTokenViaChallenge(
 	registryHost string,
 	repository string,
 	challengeHeader string,
-	enabledRegs []models.ContainerRegistry,
+	enabledRegs []containerregistry.ModelContainerRegistry,
 ) (string, string, string, error) {
 	// Normalize challenge to start at Bearer
 	ch := strings.TrimSpace(challengeHeader)
@@ -264,7 +264,7 @@ func GetChallengeURL(imageRef string) (url.URL, error) {
 // GetAuthHeaderForImage performs the /v2/ challenge for an image and returns a usable Authorization header.
 // It supports Basic and Bearer challenges. For Bearer, it reuses AcquireTokenViaChallenge which
 // looks up credentials from the database (enabledRegs) when needed.
-func GetAuthHeaderForImage(ctx context.Context, imageRef string, enabledRegs []models.ContainerRegistry) (string, error) {
+func GetAuthHeaderForImage(ctx context.Context, imageRef string, enabledRegs []containerregistry.ModelContainerRegistry) (string, error) {
 	chURL, err := GetChallengeURL(imageRef)
 	if err != nil {
 		return "", err
@@ -346,7 +346,7 @@ func GetAuthHeaderForImage(ctx context.Context, imageRef string, enabledRegs []m
 	}
 }
 
-func ResolveAuthHeaderForRepository(ctx context.Context, host, repository, tag string, enabledRegs []models.ContainerRegistry) (string, string, string, error) {
+func ResolveAuthHeaderForRepository(ctx context.Context, host, repository, tag string, enabledRegs []containerregistry.ModelContainerRegistry) (string, string, string, error) {
 	var imageRef string
 	if tag != "" {
 		imageRef = fmt.Sprintf("%s/%s:%s", host, repository, tag)

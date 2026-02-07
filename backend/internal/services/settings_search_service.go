@@ -6,11 +6,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/backend/internal/utils"
 	"github.com/getarcaneapp/arcane/types/category"
 	"github.com/getarcaneapp/arcane/types/meta"
 	"github.com/getarcaneapp/arcane/types/search"
+	"github.com/getarcaneapp/arcane/types/settings"
 )
 
 type SettingsSearchService struct {
@@ -37,13 +37,13 @@ func (s *SettingsSearchService) GetSettingsCategories() []category.Category {
 
 func (s *SettingsSearchService) buildCategoriesFromModel() []category.Category {
 	// Extract category metadata from struct tags (catmeta)
-	catMetaMap := utils.ExtractCategoryMetadata(models.Settings{}, nil)
+	catMetaMap := utils.ExtractCategoryMetadata(settings.Settings{}, nil)
 
 	// map category id -> list of settings
 	categories := map[string][]meta.Metadata{}
 	categoryOrder := []string{} // Track order from first appearance in struct
 
-	rt := reflect.TypeOf(models.Settings{})
+	rt := reflect.TypeOf(settings.Settings{})
 	for i := 0; i < rt.NumField(); i++ {
 		field := rt.Field(i)
 		keyTag := field.Tag.Get("key")

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,22 +12,21 @@ import (
 
 	"github.com/getarcaneapp/arcane/backend/internal/config"
 	"github.com/getarcaneapp/arcane/backend/internal/database"
-	"github.com/getarcaneapp/arcane/backend/internal/models"
 	"github.com/getarcaneapp/arcane/types/imageupdate"
-	"gorm.io/gorm"
+	"github.com/getarcaneapp/arcane/types/notification"
 )
 
 // AppriseService handles sending notifications through Apprise API
 //
 // Deprecated: Built-in providers (e.g., SMTP via Shoutrrr) are preferred.
 type AppriseService struct {
-	db     *database.DB
+	store  database.AppriseStore
 	config *config.Config
 }
 
-func NewAppriseService(db *database.DB, cfg *config.Config) *AppriseService {
+func NewAppriseService(store database.AppriseStore, cfg *config.Config) *AppriseService {
 	return &AppriseService{
-		db:     db,
+		store:  store,
 		config: cfg,
 	}
 }
@@ -41,48 +39,19 @@ type AppriseNotificationPayload struct {
 	Format string   `json:"format,omitempty"`
 }
 
-func (s *AppriseService) GetSettings(ctx context.Context) (*models.AppriseSettings, error) {
-	var settings models.AppriseSettings
-	if err := s.db.WithContext(ctx).First(&settings).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &settings, nil
+func (s *AppriseService) GetSettings(ctx context.Context) (*notification.AppriseSettings, error) {
+	return s.store.GetAppriseSettings(ctx)
 }
 
-func (s *AppriseService) CreateOrUpdateSettings(ctx context.Context, apiURL string, enabled bool, imageUpdateTag, containerUpdateTag string) (*models.AppriseSettings, error) {
-	var settings models.AppriseSettings
-
-	err := s.db.WithContext(ctx).First(&settings).Error
+func (s *AppriseService) CreateOrUpdateSettings(ctx context.Context, apiURL string, enabled bool, imageUpdateTag, containerUpdateTag string) (*notification.AppriseSettings, error) {
+	settings, err := s.store.UpsertAppriseSettings(ctx, apiURL, enabled, imageUpdateTag, containerUpdateTag)
 	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("failed to check apprise settings: %w", err)
-		}
-		settings = models.AppriseSettings{
-			APIURL:             apiURL,
-			Enabled:            enabled,
-			ImageUpdateTag:     imageUpdateTag,
-			ContainerUpdateTag: containerUpdateTag,
-		}
-		if err := s.db.WithContext(ctx).Create(&settings).Error; err != nil {
-			return nil, fmt.Errorf("failed to create apprise settings: %w", err)
-		}
-	} else {
-		settings.APIURL = apiURL
-		settings.Enabled = enabled
-		settings.ImageUpdateTag = imageUpdateTag
-		settings.ContainerUpdateTag = containerUpdateTag
-		if err := s.db.WithContext(ctx).Save(&settings).Error; err != nil {
-			return nil, fmt.Errorf("failed to update apprise settings: %w", err)
-		}
+		return nil, fmt.Errorf("failed to upsert apprise settings: %w", err)
 	}
-
-	return &settings, nil
+	return settings, nil
 }
 
-func (s *AppriseService) SendNotification(ctx context.Context, title, body, format string, notificationType models.NotificationEventType) error {
+func (s *AppriseService) SendNotification(ctx context.Context, title, body, format string, notificationType notification.NotificationEventType) error {
 	settings, err := s.GetSettings(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get apprise settings: %w", err)
@@ -98,11 +67,11 @@ func (s *AppriseService) SendNotification(ctx context.Context, title, body, form
 
 	var tags []string
 	switch notificationType {
-	case models.NotificationEventImageUpdate:
+	case notification.NotificationEventImageUpdate:
 		if settings.ImageUpdateTag != "" {
 			tags = []string{settings.ImageUpdateTag}
 		}
-	case models.NotificationEventContainerUpdate:
+	case notification.NotificationEventContainerUpdate:
 		if settings.ContainerUpdateTag != "" {
 			tags = []string{settings.ContainerUpdateTag}
 		}
@@ -159,7 +128,7 @@ func (s *AppriseService) SendImageUpdateNotification(ctx context.Context, imageR
 		updateInfo.CurrentDigest,
 		updateInfo.LatestDigest,
 	)
-	return s.SendNotification(ctx, title, body, "text", models.NotificationEventImageUpdate)
+	return s.SendNotification(ctx, title, body, "text", notification.NotificationEventImageUpdate)
 }
 
 func (s *AppriseService) SendContainerUpdateNotification(ctx context.Context, containerName, imageRef, oldDigest, newDigest string) error {
@@ -171,7 +140,7 @@ func (s *AppriseService) SendContainerUpdateNotification(ctx context.Context, co
 		oldDigest,
 		newDigest,
 	)
-	return s.SendNotification(ctx, title, body, "text", models.NotificationEventContainerUpdate)
+	return s.SendNotification(ctx, title, body, "text", notification.NotificationEventContainerUpdate)
 }
 
 func (s *AppriseService) SendBatchImageUpdateNotification(ctx context.Context, updates map[string]*imageupdate.Response) error {
@@ -202,11 +171,11 @@ func (s *AppriseService) SendBatchImageUpdateNotification(ctx context.Context, u
 		)
 	}
 
-	return s.SendNotification(ctx, title, body, "text", models.NotificationEventImageUpdate)
+	return s.SendNotification(ctx, title, body, "text", notification.NotificationEventImageUpdate)
 }
 
 func (s *AppriseService) TestNotification(ctx context.Context) error {
 	title := "Test Notification from Arcane"
 	body := "If you're reading this, your Apprise integration is working correctly!"
-	return s.SendNotification(ctx, title, body, "text", models.NotificationEventImageUpdate)
+	return s.SendNotification(ctx, title, body, "text", notification.NotificationEventImageUpdate)
 }
