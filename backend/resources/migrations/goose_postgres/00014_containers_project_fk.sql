@@ -1,5 +1,6 @@
 -- +goose Up
 BEGIN;
+-- +goose StatementBegin
 DO $$
 DECLARE cname text;
 BEGIN
@@ -11,7 +12,9 @@ BEGIN
   IF cname IS NOT NULL THEN
     EXECUTE format('ALTER TABLE containers DROP CONSTRAINT %I', cname);
   END IF;
-END$$;
+END;
+$$;
+-- +goose StatementEnd
 
 ALTER TABLE containers
   RENAME COLUMN stack_id TO project_id;
@@ -32,6 +35,7 @@ ALTER TABLE containers
   RENAME COLUMN IF EXISTS project_id TO stack_id;
 
 -- Optionally restore FK to stacks if it exists
+-- +goose StatementBegin
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='stacks' AND table_schema = current_schema()) THEN
@@ -39,5 +43,7 @@ BEGIN
       ADD CONSTRAINT containers_stack_id_fkey
       FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE SET NULL;
   END IF;
-END$$;
+END;
+$$;
+-- +goose StatementEnd
 COMMIT;

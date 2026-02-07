@@ -11,11 +11,11 @@ CREATE TABLE IF NOT EXISTS user_sessions_table (
     user_id TEXT NOT NULL,
     username TEXT NOT NULL,
     token TEXT NOT NULL UNIQUE,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_accessed DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_accessed TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMPTZ,
     is_active BOOLEAN NOT NULL DEFAULT true,
-    updated_at DATETIME,
+    updated_at TIMESTAMPTZ,
     FOREIGN KEY (user_id) REFERENCES users_table(id) ON DELETE CASCADE
 );
 
