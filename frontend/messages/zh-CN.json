@@ -180,6 +180,9 @@
 	"scheduled_prune_networks_description": "移除未使用的网络",
 	"scheduled_prune_build_cache_label": "清理构建缓存",
 	"scheduled_prune_build_cache_description": "移除 Docker 构建缓存",
+	"auto_update_select_containers": "选择容器...",
+	"auto_update_containers_excluded_one": "不包括1个容器",
+	"auto_update_containers_excluded_many": "{count} containers excluded",
 	"_comment_common_actions": "=== 通用 - 运行状态===",
 	"common_action_creating": "创建中…",
 	"common_action_deleting": "正在删除…",
@@ -1956,5 +1959,7 @@
 	"environments_agent_address_description": "您的代理人可以访问的 URL",
 	"environments_generate_config": "生成代理配置",
 	"project_files": "工程文件",
-	"project_includes": "包含"
+	"project_includes": "包含",
+	"notifications_event_prune_report_label": "系统清理报告",
+	"notifications_event_prune_report_description": "在计划的修剪操作完成时收到摘要报告"
 }
