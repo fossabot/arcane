@@ -598,7 +598,7 @@
 	"images_remove_success_many": "{count} Images erfolgreich entfernt",
 	"images_remove_failed_one": "Fehler beim Entfernen des Image",
 	"images_remove_failed_many": "Fehler beim Entfernen der {count} Images",
-	"_comment_vulnerabilities": "=== VULNERABILITIEN ===",
+	"_comment_vulnerabilities": "=== SCHWACHSTELLEN ===",
 	"vuln_title": "Schwachstellen",
 	"vuln_scan": "Scannen",
 	"vuln_rescan": "Re-Scan",
