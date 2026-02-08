@@ -17,16 +17,20 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/fatih/color"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
 var (
-	successColor = color.New(color.FgGreen).SprintFunc()
-	errorColor   = color.New(color.FgRed).SprintFunc()
-	warnColor    = color.New(color.FgYellow).SprintFunc()
-	infoColor    = color.New(color.FgCyan).SprintFunc()
-	headerColor  = color.New(color.FgHiWhite, color.Bold).SprintFunc()
+	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	keyStyle     = lipgloss.NewStyle().Bold(true)
+	valueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	columnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	columnHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
 )
 
 var ansiRegexp = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
@@ -35,35 +39,35 @@ var ansiRegexp = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 // The message is prefixed with a newline for visual separation.
 // Format specifiers and arguments work like fmt.Printf.
 func Success(format string, a ...interface{}) {
-	fmt.Printf("\n%s\n", successColor(fmt.Sprintf(format, a...)))
+	fmt.Printf("\n%s\n", successStyle.Render(fmt.Sprintf(format, a...)))
 }
 
 // Error prints an error message in red.
 // The message is prefixed with a newline for visual separation.
 // Format specifiers and arguments work like fmt.Printf.
 func Error(format string, a ...interface{}) {
-	fmt.Printf("\n%s\n", errorColor(fmt.Sprintf(format, a...)))
+	fmt.Printf("\n%s\n", errorStyle.Render(fmt.Sprintf(format, a...)))
 }
 
 // Warning prints a warning message in yellow.
 // The message is prefixed with a newline for visual separation.
 // Format specifiers and arguments work like fmt.Printf.
 func Warning(format string, a ...interface{}) {
-	fmt.Printf("\n%s\n", warnColor(fmt.Sprintf(format, a...)))
+	fmt.Printf("\n%s\n", warnStyle.Render(fmt.Sprintf(format, a...)))
 }
 
 // Info prints an info message in cyan.
 // The message is prefixed with a newline for visual separation.
 // Format specifiers and arguments work like fmt.Printf.
 func Info(format string, a ...interface{}) {
-	fmt.Printf("\n%s\n", infoColor(fmt.Sprintf(format, a...)))
+	fmt.Printf("\n%s\n", infoStyle.Render(fmt.Sprintf(format, a...)))
 }
 
 // Header prints a header message in bold white.
 // Use this to introduce sections of output. The message is prefixed
 // with a newline for visual separation.
 func Header(format string, a ...interface{}) {
-	fmt.Printf("\n%s\n", headerColor(fmt.Sprintf(format, a...)))
+	fmt.Printf("\n%s\n", headerStyle.Render(fmt.Sprintf(format, a...)))
 }
 
 // Print prints a standard message without color formatting.
@@ -76,7 +80,7 @@ func Print(format string, a ...interface{}) {
 // This is useful for displaying structured information like image details
 // or configuration values.
 func KeyValue(key string, value interface{}) {
-	fmt.Printf("%s: %v\n", color.New(color.Bold).Sprint(key), color.New(color.FgBlue).Sprint(value))
+	fmt.Printf("%s: %v\n", keyStyle.Render(key), valueStyle.Render(fmt.Sprint(value)))
 }
 
 func stripAnsi(s string) string {
@@ -129,12 +133,11 @@ func computeWidths(headers []string, rows [][]string) []int {
 }
 
 func printHeader(headers []string, widths []int) {
-	headerFmt := color.New(color.Bold, color.FgHiCyan).SprintFunc()
 	sep := "  "
 	n := len(headers)
 	for i, h := range headers {
 		visible := stripAnsi(h)
-		colored := headerFmt(h)
+		colored := columnHeader.Render(h)
 		padLen := widths[i] - runewidth.StringWidth(visible)
 		if padLen < 0 {
 			padLen = 0
@@ -150,7 +153,6 @@ func printHeader(headers []string, widths []int) {
 
 func printRow(row []string, widths []int, n int) {
 	sep := "  "
-	columnFmt := color.New(color.FgYellow).SprintFunc()
 
 	// Prepare lines per column
 	cellLines := make([][]string, n)
@@ -176,7 +178,7 @@ func printRow(row []string, widths []int, n int) {
 
 			var rendered string
 			if i == 0 {
-				rendered = columnFmt(val)
+				rendered = columnStyle.Render(val)
 			} else {
 				rendered = fmt.Sprint(val)
 			}
