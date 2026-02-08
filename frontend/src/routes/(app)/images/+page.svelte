@@ -3,6 +3,7 @@
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { toast } from 'svelte-sonner';
 	import ImagePullSheet from '$lib/components/sheets/image-pull-sheet.svelte';
+	import ImageBuildSheet from '$lib/components/sheets/image-build-sheet.svelte';
 	import bytes from 'bytes';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import { displaySize, FileDropZone, MEGABYTE, type FileDropZoneProps } from '$lib/components/ui/file-drop-zone';
@@ -15,7 +16,7 @@
 	import { ResourcePageLayout, type ActionButton, type StatCardConfig } from '$lib/layouts/index.js';
 	import { useEnvironmentRefresh } from '$lib/hooks/use-environment-refresh.svelte';
 	import { parallelRefresh } from '$lib/utils/refresh.util';
-	import { CloseIcon, VolumesIcon, LocalFolderComputerIcon } from '$lib/icons';
+	import { CloseIcon, VolumesIcon, LocalFolderComputerIcon, CodeIcon } from '$lib/icons';
 
 	let { data } = $props();
 
@@ -26,6 +27,7 @@
 
 	let isLoading = $state({ pulling: false, uploading: false, refreshing: false, pruning: false, checking: false });
 	let isPullDialogOpen = $state(false);
+	let isBuildDialogOpen = $state(false);
 	let isUploadDialogOpen = $state(false);
 	let isConfirmPruneDialogOpen = $state(false);
 	let uploadedFiles = $state<File[]>([]);
@@ -114,6 +116,7 @@
 
 	const actionButtons: ActionButton[] = $derived([
 		{ id: 'pull', action: 'pull', label: m.images_pull_image(), onclick: () => (isPullDialogOpen = true) },
+		{ id: 'build', action: 'base', label: 'Build Image', icon: CodeIcon, onclick: () => (isBuildDialogOpen = true) },
 		{ id: 'upload', action: 'create', label: m.images_upload_image(), onclick: () => (isUploadDialogOpen = true) },
 		{
 			id: 'check-updates',
@@ -175,6 +178,12 @@
 		<ImagePullSheet
 			bind:open={isPullDialogOpen}
 			onPullFinished={async () => {
+				images = await imageService.getImages(requestOptions);
+			}}
+		/>
+		<ImageBuildSheet
+			bind:open={isBuildDialogOpen}
+			onBuildFinished={async () => {
 				images = await imageService.getImages(requestOptions);
 			}}
 		/>

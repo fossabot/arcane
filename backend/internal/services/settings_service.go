@@ -142,6 +142,11 @@ func (s *SettingsService) getDefaultSettings() *models.Settings {
 		HTTPClientTimeout:      models.SettingVariable{Value: "30"},
 		RegistryTimeout:        models.SettingVariable{Value: "30"},
 		ProxyRequestTimeout:    models.SettingVariable{Value: "60"},
+		BuildProvider:          models.SettingVariable{Value: "local"},
+		BuildkitEndpoint:       models.SettingVariable{Value: "unix:///run/buildkit/buildkitd.sock"},
+		BuildTimeout:           models.SettingVariable{Value: "1800"},
+		DepotProjectId:         models.SettingVariable{Value: ""},
+		DepotToken:             models.SettingVariable{Value: ""},
 
 		InstanceID: models.SettingVariable{Value: ""},
 	}
@@ -485,6 +490,11 @@ var timeoutSettingKeys = []string{
 	"httpClientTimeout",
 	"registryTimeout",
 	"proxyRequestTimeout",
+	"buildProvider",
+	"buildkitEndpoint",
+	"buildTimeout",
+	"depotProjectId",
+	"depotToken",
 }
 
 func (s *SettingsService) prepareUpdateValues(updates settings.Update, cfg, defaultCfg *models.Settings) ([]models.SettingVariable, bool, bool, bool, bool, map[string]string, error) {

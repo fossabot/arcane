@@ -215,7 +215,11 @@ func syncTimeoutSettingsToAgentsInternal(ctx context.Context, appServices *Servi
 		return
 	}
 
-	slog.InfoContext(ctx, "Syncing timeout settings to remote environments", "count", len(envs), "settings", timeoutSettings)
+	keys := make([]string, 0, len(timeoutSettings))
+	for k := range timeoutSettings {
+		keys = append(keys, k)
+	}
+	slog.InfoContext(ctx, "Syncing environment settings to remote environments", "count", len(envs), "keys", keys)
 
 	for _, env := range envs {
 		_, statusCode, err := appServices.Environment.ProxyRequest(ctx, env.ID, http.MethodPut, "/api/environments/0/settings", body)

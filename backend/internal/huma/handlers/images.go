@@ -23,6 +23,7 @@ type ImageHandler struct {
 	imageService       *services.ImageService
 	imageUpdateService *services.ImageUpdateService
 	settingsService    *services.SettingsService
+	buildService       *services.BuildService
 }
 
 // --- Huma Input/Output Wrappers ---
@@ -73,6 +74,11 @@ type PullImageInput struct {
 	Body          image.PullOptions
 }
 
+type BuildImageInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	Body          image.BuildRequest
+}
+
 type PruneImagesInput struct {
 	EnvironmentID string `path:"id" doc:"Environment ID"`
 	Dangling      bool   `query:"dangling" doc:"Only remove dangling images"`
@@ -109,12 +115,13 @@ type UploadImageOutput struct {
 }
 
 // RegisterImages registers image management routes using Huma.
-func RegisterImages(api huma.API, dockerService *services.DockerClientService, imageService *services.ImageService, imageUpdateService *services.ImageUpdateService, settingsService *services.SettingsService) {
+func RegisterImages(api huma.API, dockerService *services.DockerClientService, imageService *services.ImageService, imageUpdateService *services.ImageUpdateService, settingsService *services.SettingsService, buildService *services.BuildService) {
 	h := &ImageHandler{
 		dockerService:      dockerService,
 		imageService:       imageService,
 		imageUpdateService: imageUpdateService,
 		settingsService:    settingsService,
+		buildService:       buildService,
 	}
 
 	huma.Register(api, huma.Operation{
@@ -181,6 +188,19 @@ func RegisterImages(api huma.API, dockerService *services.DockerClientService, i
 			{"ApiKeyAuth": {}},
 		},
 	}, h.PullImage)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "build-image",
+		Method:      http.MethodPost,
+		Path:        "/environments/{id}/images/build",
+		Summary:     "Build an image",
+		Description: "Build a Docker image using BuildKit with streaming progress output",
+		Tags:        []string{"Images"},
+		Security: []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		},
+	}, h.BuildImage)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "prune-images",
@@ -358,6 +378,37 @@ func (h *ImageHandler) PullImage(ctx context.Context, input *PullImageInput) (*h
 			writer := humaCtx.BodyWriter()
 
 			if err := h.imageService.PullImage(humaCtx.Context(), fullImageName, writer, *user, credentials); err != nil {
+				_, _ = fmt.Fprintf(writer, `{"error":%q}`+"\n", err.Error())
+				return
+			}
+		},
+	}, nil
+}
+
+// BuildImage builds a Docker image with streaming progress.
+func (h *ImageHandler) BuildImage(ctx context.Context, input *BuildImageInput) (*huma.StreamResponse, error) {
+	if h.buildService == nil {
+		return nil, huma.Error500InternalServerError("service not available")
+	}
+
+	if strings.TrimSpace(input.Body.ContextDir) == "" {
+		return nil, huma.Error400BadRequest("contextDir is required")
+	}
+
+	_, exists := humamw.GetCurrentUserFromContext(ctx)
+	if !exists {
+		return nil, huma.Error401Unauthorized((&common.NotAuthenticatedError{}).Error())
+	}
+
+	return &huma.StreamResponse{
+		Body: func(humaCtx huma.Context) { //nolint:contextcheck // context is obtained from humaCtx.Context()
+			humaCtx.SetHeader("Content-Type", "application/x-json-stream")
+			humaCtx.SetHeader("Cache-Control", "no-cache")
+			humaCtx.SetHeader("Connection", "keep-alive")
+			humaCtx.SetHeader("X-Accel-Buffering", "no")
+
+			writer := humaCtx.BodyWriter()
+			if _, err := h.buildService.BuildImage(humaCtx.Context(), input.Body, writer, ""); err != nil {
 				_, _ = fmt.Fprintf(writer, `{"error":%q}`+"\n", err.Error())
 				return
 			}
