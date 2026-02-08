@@ -8,6 +8,7 @@
 		eventImageUpdate: boolean;
 		eventContainerUpdate: boolean;
 		eventVulnerabilityFound: boolean;
+    eventPruneReport: boolean;
 		disabled?: boolean;
 	}
 
@@ -16,6 +17,7 @@
 		eventImageUpdate = $bindable(),
 		eventContainerUpdate = $bindable(),
 		eventVulnerabilityFound = $bindable(),
+    eventPruneReport = $bindable(),
 		disabled = false
 	}: Props = $props();
 </script>
@@ -39,6 +41,13 @@
 			description={m.notifications_event_container_update_description()}
 		/>
 		<SwitchWithLabel
+			id="{providerId}-event-prune-report"
+			bind:checked={eventPruneReport}
+			{disabled}
+			label={m.notifications_event_prune_report_label()}
+			description={m.notifications_event_prune_report_description()}
+    />
+    <SwitchWithLabel
 			id="{providerId}-event-vulnerability-found"
 			bind:checked={eventVulnerabilityFound}
 			{disabled}
